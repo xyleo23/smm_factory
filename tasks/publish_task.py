@@ -1,0 +1,271 @@
+"""Celery task for publishing posts to multiple platforms."""
+
+import asyncio
+from datetime import datetime
+
+from aiogram import Bot
+from celery import Task
+from loguru import logger
+from sqlalchemy import select
+
+from tasks.celery_app import celery_app
+from models import Post, UserSettings
+from core.database import get_db
+from publisher import TelegramPublisher, VCPublisher, RBCPublisher
+from core.config import config
+
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+def publish_post(self: Task, post_id: int) -> dict:
+    """
+    Publish post to all configured platforms.
+    
+    This task:
+    1. Fetches the post from database
+    2. Gets user settings for publishing channels
+    3. Publishes to Telegram channels
+    4. Publishes to VC.ru (if configured)
+    5. Publishes to RBC Companies (if configured)
+    6. Updates post status in database
+    
+    Args:
+        post_id: ID of the post to publish
+        
+    Returns:
+        Dictionary with publishing results
+    """
+    logger.info(f"Starting publish_post task for post {post_id}")
+    
+    try:
+        # Run async code in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            result = loop.run_until_complete(_publish_post_async(post_id))
+            return result
+        finally:
+            loop.close()
+            
+    except Exception as exc:
+        logger.error(f"publish_post task failed for post {post_id}: {exc}")
+        
+        # Retry with exponential backoff
+        retry_count = self.request.retries
+        if retry_count < self.max_retries:
+            countdown = 60 * (2 ** retry_count)
+            logger.info(f"Retrying task in {countdown}s (attempt {retry_count + 1}/{self.max_retries})")
+            raise self.retry(exc=exc, countdown=countdown)
+        else:
+            logger.error("Max retries reached, task failed permanently")
+            
+            # Update post status to failed
+            try:
+                with get_db() as db:
+                    post = db.get(Post, post_id)
+                    if post:
+                        post.status = "failed"
+                        db.commit()
+            except Exception as e:
+                logger.error(f"Failed to update post status: {e}")
+            
+            return {
+                "status": "failed",
+                "post_id": post_id,
+                "error": str(exc),
+                "retries": retry_count,
+            }
+
+
+async def _publish_post_async(post_id: int) -> dict:
+    """Async implementation of post publishing."""
+    
+    results = {
+        "post_id": post_id,
+        "telegram": [],
+        "vc": False,
+        "rbc": False,
+        "errors": [],
+    }
+    
+    # Step 1: Get post from database
+    logger.info(f"Fetching post {post_id} from database")
+    with get_db() as db:
+        post = db.get(Post, post_id)
+        
+        if not post:
+            logger.error(f"Post {post_id} not found in database")
+            return {
+                "status": "error",
+                "error": "Post not found",
+                **results,
+            }
+        
+        if post.status == "published":
+            logger.warning(f"Post {post_id} is already published")
+            return {
+                "status": "skipped",
+                "reason": "already_published",
+                **results,
+            }
+        
+        # Get post data
+        post_title = post.title
+        post_text = post.text
+        post_image_url = post.image_url
+    
+    logger.info(f"Publishing post: {post_title}")
+    
+    # Step 2: Get user settings
+    with get_db() as db:
+        user_settings = db.execute(
+            select(UserSettings).limit(1)
+        ).scalar_one_or_none()
+        
+        if not user_settings:
+            logger.warning("No user settings found, using defaults")
+            user_settings = UserSettings(
+                user_id=1,
+                tg_channels=[],
+                is_auto_publish=False,
+            )
+    
+    # Step 3: Publish to Telegram channels
+    if user_settings.tg_channels:
+        logger.info(f"Publishing to {len(user_settings.tg_channels)} Telegram channels")
+        
+        if not config.telegram_bot_token:
+            logger.error("TELEGRAM_BOT_TOKEN not configured")
+            results["errors"].append("telegram_token_missing")
+        else:
+            bot = Bot(token=config.telegram_bot_token)
+            tg_publisher = TelegramPublisher()
+            
+            try:
+                for channel_id in user_settings.tg_channels:
+                    try:
+                        logger.info(f"Publishing to Telegram channel: {channel_id}")
+                        success = await tg_publisher.publish(
+                            bot=bot,
+                            channel_id=channel_id,
+                            text=post_text,
+                            image_url=post_image_url,
+                        )
+                        
+                        if success:
+                            logger.success(f"Published to Telegram channel {channel_id}")
+                            results["telegram"].append({
+                                "channel": channel_id,
+                                "status": "success",
+                            })
+                        else:
+                            logger.error(f"Failed to publish to Telegram channel {channel_id}")
+                            results["telegram"].append({
+                                "channel": channel_id,
+                                "status": "failed",
+                            })
+                            results["errors"].append(f"telegram_{channel_id}_failed")
+                            
+                    except Exception as e:
+                        logger.error(f"Error publishing to Telegram channel {channel_id}: {e}")
+                        results["telegram"].append({
+                            "channel": channel_id,
+                            "status": "error",
+                            "error": str(e),
+                        })
+                        results["errors"].append(f"telegram_{channel_id}_error")
+                
+            finally:
+                await bot.session.close()
+    else:
+        logger.info("No Telegram channels configured")
+    
+    # Step 4: Publish to VC.ru
+    if config.vc_session_token:
+        logger.info("Publishing to VC.ru")
+        
+        try:
+            vc_publisher = VCPublisher()
+            success = vc_publisher.publish(
+                title=post_title or "Untitled Post",
+                text=post_text,
+                image_url=post_image_url,
+            )
+            
+            results["vc"] = success
+            
+            if success:
+                logger.success("Published to VC.ru")
+            else:
+                logger.warning("VC.ru publishing returned False")
+                results["errors"].append("vc_failed")
+                
+        except Exception as e:
+            logger.error(f"Error publishing to VC.ru: {e}")
+            results["errors"].append(f"vc_error: {e}")
+    else:
+        logger.info("VC.ru not configured (VC_SESSION_TOKEN missing)")
+    
+    # Step 5: Publish to RBC Companies
+    if config.rbc_login and config.rbc_password:
+        logger.info("Publishing to RBC Companies")
+        
+        try:
+            rbc_publisher = RBCPublisher()
+            
+            # RBC requires image_path (local file), not image_url
+            # TODO: Download image from image_url to local file first
+            # For now, we'll skip image upload
+            success = await rbc_publisher.publish(
+                title=post_title or "Untitled Post",
+                text=post_text,
+                image_path=None,
+            )
+            
+            results["rbc"] = success
+            
+            if success:
+                logger.success("Published to RBC Companies")
+            else:
+                logger.warning("RBC Companies publishing returned False")
+                results["errors"].append("rbc_failed")
+                
+        except Exception as e:
+            logger.error(f"Error publishing to RBC Companies: {e}")
+            results["errors"].append(f"rbc_error: {e}")
+    else:
+        logger.info("RBC Companies not configured (RBC_LOGIN or RBC_PASSWORD missing)")
+    
+    # Step 6: Update post status in database
+    with get_db() as db:
+        post = db.get(Post, post_id)
+        if post:
+            # Determine overall status
+            has_success = (
+                any(r["status"] == "success" for r in results["telegram"])
+                or results["vc"]
+                or results["rbc"]
+            )
+            
+            if has_success:
+                post.status = "published"
+                post.published_at = datetime.utcnow()
+                logger.success(f"Post {post_id} marked as published")
+            else:
+                post.status = "failed"
+                logger.error(f"Post {post_id} marked as failed (no successful publishes)")
+            
+            db.commit()
+    
+    # Determine overall result
+    if results["errors"]:
+        status = "partial" if has_success else "failed"
+    else:
+        status = "success"
+    
+    logger.info(f"Publishing completed for post {post_id}: {status}")
+    
+    return {
+        "status": status,
+        **results,
+    }

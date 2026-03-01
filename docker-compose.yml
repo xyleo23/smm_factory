@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: smm_postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-smm_factory}
+      POSTGRES_USER: ${POSTGRES_USER:-smm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-smm} -d ${POSTGRES_DB:-smm_factory}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - smm_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: smm_redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - smm_net
+
+  bot:
+    build: .
+    container_name: smm_bot
+    env_file: .env
+    command: python main.py
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - smm_net
+
+  celery_worker:
+    build: .
+    container_name: smm_worker
+    env_file: .env
+    command: celery -A tasks.celery_app worker --loglevel=info --concurrency=2
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - smm_net
+
+  celery_beat:
+    build: .
+    container_name: smm_beat
+    env_file: .env
+    command: celery -A tasks.celery_app beat --loglevel=info
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - logs:/app/logs
+    restart: unless-stopped
+    networks:
+      - smm_net
+
+networks:
+  smm_net:
+    driver: bridge
+
+volumes:
+  pgdata:
+  redis_data:
+  logs:
