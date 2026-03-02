@@ -12,10 +12,11 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
 from loguru import logger
+from sqlalchemy import select
 
 from core.config import config
-from models import UserSettings
-from core.database import get_db, init_db
+from core.database import async_session, init_db
+from models.settings import UserSettings
 
 from bot.handlers import main as main_handler
 from bot.handlers import settings as settings_handler
@@ -24,23 +25,29 @@ from bot.handlers import queue as queue_handler
 from bot.handlers import stats as stats_handler
 
 
-def _seed_default_settings() -> None:
+async def _seed_default_settings() -> None:
     """Insert a default UserSettings row when the table is empty."""
-    with get_db() as db:
-        if db.query(UserSettings).count() == 0:
-            admin_id = int(config.admin_chat_id) if config.admin_chat_id else 0
-            db.add(
-                UserSettings(
-                    user_id=admin_id,
-                    tone="professional",
-                    selected_llm="gpt-4",
-                    is_auto_publish=False,
-                    serp_keywords=[],
-                    internal_links=[],
-                    tg_channels=[],
+    async with async_session() as db:
+        try:
+            result = await db.execute(select(UserSettings))
+            if not result.scalars().first():
+                admin_id = int(config.admin_chat_id) if config.admin_chat_id else 0
+                db.add(
+                    UserSettings(
+                        user_id=admin_id,
+                        tone="professional",
+                        selected_llm="gpt-4",
+                        is_auto_publish=False,
+                        serp_keywords=[],
+                        internal_links=[],
+                        tg_channels=[],
+                    )
                 )
-            )
-            logger.info("Seeded default UserSettings (user_id={}).", admin_id)
+                await db.commit()
+                logger.info("Seeded default UserSettings (user_id={}).", admin_id)
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def on_startup(bot: Bot) -> None:
@@ -62,8 +69,8 @@ async def main() -> None:
         sys.exit(1)
 
     # Initialise DB tables and seed defaults
-    init_db()
-    _seed_default_settings()
+    await init_db()
+    await _seed_default_settings()
 
     bot = Bot(
         token=token,
