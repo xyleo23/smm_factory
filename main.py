@@ -31,20 +31,20 @@ async def _seed_default_settings() -> None:
         try:
             result = await db.execute(select(UserSettings))
             if not result.scalars().first():
-                admin_id = int(config.admin_chat_id) if config.admin_chat_id else 0
                 db.add(
                     UserSettings(
-                        user_id=admin_id,
                         tone="professional",
                         selected_llm="gpt-4",
                         is_auto_publish=False,
-                        serp_keywords=[],
-                        internal_links=[],
-                        tg_channels=[],
+                        parse_interval_minutes=60,
+                        serp_keywords=None,
+                        internal_links=None,
+                        tg_channels=None,
+                        utm_template=None,
                     )
                 )
                 await db.commit()
-                logger.info("Seeded default UserSettings (user_id={}).", admin_id)
+                logger.info("Seeded default UserSettings.")
         except Exception:
             await db.rollback()
             raise
