@@ -2,38 +2,41 @@
 
 from sqlalchemy import select
 
-from models import UserSettings
-from core.database import get_db
+from core.database import async_session
+from models.settings import UserSettings
 
 
-def get_or_create_settings(user_id: int) -> dict:
+async def get_or_create_settings(user_id: int) -> dict:
     """
     Fetch UserSettings for a given user_id, creating defaults if not found.
     Returns a plain dict so it's safe to use after the session closes.
     """
-    with get_db() as db:
-        settings = db.execute(
-            select(UserSettings).where(UserSettings.user_id == user_id)
-        ).scalar_one_or_none()
+    async with async_session() as db:
+        try:
+            result = await db.execute(
+                select(UserSettings).where(UserSettings.id == user_id)
+            )
+            settings = result.scalars().first()
 
-        if not settings:
-            settings = UserSettings(user_id=user_id)
-            db.add(settings)
-            db.commit()
-            db.refresh(settings)
+            if not settings:
+                settings = UserSettings()
+                db.add(settings)
+                await db.commit()
+                await db.refresh(settings)
 
-        return {
-            "id": settings.id,
-            "user_id": settings.user_id,
-            "serp_keywords": settings.serp_keywords or [],
-            "internal_links": settings.internal_links or [],
-            "utm_template": settings.utm_template,
-            "tone": settings.tone,
-            "keywords": settings.keywords or [],
-            "selected_llm": settings.selected_llm,
-            "tg_channels": settings.tg_channels or [],
-            "is_auto_publish": settings.is_auto_publish,
-        }
+            return {
+                "id": settings.id,
+                "serp_keywords": settings.serp_keywords or [],
+                "internal_links": settings.internal_links or [],
+                "utm_template": settings.utm_template,
+                "tone": settings.tone,
+                "selected_llm": settings.selected_llm,
+                "tg_channels": settings.tg_channels or [],
+                "is_auto_publish": settings.is_auto_publish,
+            }
+        except Exception:
+            await db.rollback()
+            raise
 
 
 def settings_text(s: dict) -> str:

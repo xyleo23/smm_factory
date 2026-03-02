@@ -11,7 +11,7 @@ from bot.keyboards.settings import get_back_keyboard, get_settings_keyboard
 from bot.states import SettingsStates
 from bot.utils import get_or_create_settings, settings_text
 from models import UserSettings
-from core.database import get_db
+from core.database import async_session
 
 router = Router(name="settings")
 
@@ -20,41 +20,50 @@ CANCEL_TEXT = "Отправьте /start для возврата в главно
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-def _load_settings_model(user_id: int) -> UserSettings:
+async def _load_settings_model(user_id: int) -> UserSettings:
     """Return the ORM object (still attached to a fresh session snapshot)."""
-    with get_db() as db:
-        s = db.execute(
-            select(UserSettings).where(UserSettings.user_id == user_id)
-        ).scalar_one_or_none()
-        if s is None:
-            s = UserSettings(user_id=user_id)
-            db.add(s)
-            db.commit()
-            db.refresh(s)
-        # Build a detached copy by touching every column
-        db.expunge(s)
-        return s
+    async with async_session() as db:
+        try:
+            result = await db.execute(
+                select(UserSettings).where(UserSettings.id == user_id)
+            )
+            s = result.scalars().first()
+            if s is None:
+                s = UserSettings()
+                db.add(s)
+                await db.commit()
+                await db.refresh(s)
+            db.expunge(s)
+            return s
+        except Exception:
+            await db.rollback()
+            raise
 
 
-def _update_settings(user_id: int, **kwargs) -> None:
+async def _update_settings(user_id: int, **kwargs) -> None:
     """Apply keyword-argument updates to the user's settings row."""
-    with get_db() as db:
-        s = db.execute(
-            select(UserSettings).where(UserSettings.user_id == user_id)
-        ).scalar_one_or_none()
-        if s is None:
-            s = UserSettings(user_id=user_id, **kwargs)
-            db.add(s)
-        else:
-            for key, value in kwargs.items():
-                setattr(s, key, value)
-        db.commit()
+    async with async_session() as db:
+        try:
+            result = await db.execute(
+                select(UserSettings).where(UserSettings.id == user_id)
+            )
+            s = result.scalars().first()
+            if s is None:
+                s = UserSettings(**kwargs)
+                db.add(s)
+            else:
+                for key, value in kwargs.items():
+                    setattr(s, key, value)
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
 
 async def _refresh_settings_message(callback: CallbackQuery, user_id: int) -> None:
     """Edit the current message to show updated settings + keyboard."""
-    settings_dict = get_or_create_settings(user_id)
-    settings_obj = _load_settings_model(user_id)
+    settings_dict = await get_or_create_settings(user_id)
+    settings_obj = await _load_settings_model(user_id)
     await callback.message.edit_text(
         text=settings_text(settings_dict),
         reply_markup=get_settings_keyboard(settings_obj),
@@ -67,8 +76,8 @@ async def _refresh_settings_message(callback: CallbackQuery, user_id: int) -> No
 @router.callback_query(F.data == "settings")
 async def cb_open_settings(callback: CallbackQuery) -> None:
     user_id = callback.from_user.id
-    settings_dict = get_or_create_settings(user_id)
-    settings_obj = _load_settings_model(user_id)
+    settings_dict = await get_or_create_settings(user_id)
+    settings_obj = await _load_settings_model(user_id)
 
     await callback.message.edit_text(
         text=settings_text(settings_dict),
@@ -84,7 +93,7 @@ async def cb_open_settings(callback: CallbackQuery) -> None:
 async def cb_set_tone(callback: CallbackQuery) -> None:
     tone = callback.data.split(":", 1)[1]
     user_id = callback.from_user.id
-    _update_settings(user_id, tone=tone)
+    await _update_settings(user_id, tone=tone)
     await _refresh_settings_message(callback, user_id)
     await callback.answer(f"Тон изменён: {tone}")
 
@@ -95,7 +104,7 @@ async def cb_set_tone(callback: CallbackQuery) -> None:
 async def cb_set_llm(callback: CallbackQuery) -> None:
     llm = callback.data.split(":", 1)[1]
     user_id = callback.from_user.id
-    _update_settings(user_id, selected_llm=llm)
+    await _update_settings(user_id, selected_llm=llm)
     await _refresh_settings_message(callback, user_id)
     await callback.answer(f"LLM изменена: {llm}")
 
@@ -105,9 +114,9 @@ async def cb_set_llm(callback: CallbackQuery) -> None:
 @router.callback_query(F.data == "toggle_autopublish")
 async def cb_toggle_autopublish(callback: CallbackQuery) -> None:
     user_id = callback.from_user.id
-    settings_dict = get_or_create_settings(user_id)
+    settings_dict = await get_or_create_settings(user_id)
     new_value = not settings_dict["is_auto_publish"]
-    _update_settings(user_id, is_auto_publish=new_value)
+    await _update_settings(user_id, is_auto_publish=new_value)
     await _refresh_settings_message(callback, user_id)
     status = "включена ✅" if new_value else "выключена ❌"
     await callback.answer(f"Автопубликация {status}")
@@ -133,12 +142,12 @@ async def cb_ask_serp_keys(callback: CallbackQuery, state: FSMContext) -> None:
 async def msg_serp_keys(message: Message, state: FSMContext) -> None:
     keywords = [k.strip() for k in message.text.split(",") if k.strip()]
     user_id = message.from_user.id
-    _update_settings(user_id, serp_keywords=keywords)
+    await _update_settings(user_id, serp_keywords=keywords)
     await state.clear()
     logger.info(f"User {user_id} set SERP keywords: {keywords}")
 
-    settings_dict = get_or_create_settings(user_id)
-    settings_obj = _load_settings_model(user_id)
+    settings_dict = await get_or_create_settings(user_id)
+    settings_obj = await _load_settings_model(user_id)
     await message.answer(
         text=f"✅ Сохранено {len(keywords)} ключей.\n\n" + settings_text(settings_dict),
         reply_markup=get_settings_keyboard(settings_obj),
@@ -165,12 +174,12 @@ async def cb_ask_utm(callback: CallbackQuery, state: FSMContext) -> None:
 async def msg_utm(message: Message, state: FSMContext) -> None:
     utm = message.text.strip()
     user_id = message.from_user.id
-    _update_settings(user_id, utm_template=utm)
+    await _update_settings(user_id, utm_template=utm)
     await state.clear()
     logger.info(f"User {user_id} set UTM template: {utm}")
 
-    settings_dict = get_or_create_settings(user_id)
-    settings_obj = _load_settings_model(user_id)
+    settings_dict = await get_or_create_settings(user_id)
+    settings_obj = await _load_settings_model(user_id)
     await message.answer(
         text=f"✅ UTM-шаблон сохранён.\n\n" + settings_text(settings_dict),
         reply_markup=get_settings_keyboard(settings_obj),
@@ -197,12 +206,12 @@ async def cb_ask_links(callback: CallbackQuery, state: FSMContext) -> None:
 async def msg_links(message: Message, state: FSMContext) -> None:
     links = [lnk.strip() for lnk in message.text.split(",") if lnk.strip()]
     user_id = message.from_user.id
-    _update_settings(user_id, internal_links=links)
+    await _update_settings(user_id, internal_links=links)
     await state.clear()
     logger.info(f"User {user_id} set internal links: {links}")
 
-    settings_dict = get_or_create_settings(user_id)
-    settings_obj = _load_settings_model(user_id)
+    settings_dict = await get_or_create_settings(user_id)
+    settings_obj = await _load_settings_model(user_id)
     await message.answer(
         text=f"✅ Сохранено {len(links)} ссылок.\n\n" + settings_text(settings_dict),
         reply_markup=get_settings_keyboard(settings_obj),
@@ -229,12 +238,12 @@ async def cb_ask_channels(callback: CallbackQuery, state: FSMContext) -> None:
 async def msg_channels(message: Message, state: FSMContext) -> None:
     channels = [ch.strip() for ch in message.text.split(",") if ch.strip()]
     user_id = message.from_user.id
-    _update_settings(user_id, tg_channels=channels)
+    await _update_settings(user_id, tg_channels=channels)
     await state.clear()
     logger.info(f"User {user_id} set TG channels: {channels}")
 
-    settings_dict = get_or_create_settings(user_id)
-    settings_obj = _load_settings_model(user_id)
+    settings_dict = await get_or_create_settings(user_id)
+    settings_obj = await _load_settings_model(user_id)
     await message.answer(
         text=f"✅ Сохранено {len(channels)} каналов.\n\n" + settings_text(settings_dict),
         reply_markup=get_settings_keyboard(settings_obj),

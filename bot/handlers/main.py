@@ -19,7 +19,7 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
 
     user_id = message.from_user.id
-    settings = get_or_create_settings(user_id)
+    settings = await get_or_create_settings(user_id)
 
     await message.answer(
         text=settings_text(settings),
@@ -52,7 +52,7 @@ async def cb_back_to_main(callback: CallbackQuery, state: FSMContext) -> None:
     await state.clear()
 
     user_id = callback.from_user.id
-    settings = get_or_create_settings(user_id)
+    settings = await get_or_create_settings(user_id)
 
     await callback.message.edit_text(
         text=settings_text(settings),
