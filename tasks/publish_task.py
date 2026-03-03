@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from tasks.celery_app import celery_app
 from models import Post, UserSettings
-from core.database import get_db
+from core.database import async_session
 from publisher import TelegramPublisher, VCPublisher, RBCPublisher
 from core.config import config
 
@@ -61,11 +61,7 @@ def publish_post(self: Task, post_id: int) -> dict:
             
             # Update post status to failed
             try:
-                with get_db() as db:
-                    post = db.get(Post, post_id)
-                    if post:
-                        post.status = "failed"
-                        db.commit()
+                asyncio.run(_update_post_status(post_id, "failed"))
             except Exception as e:
                 logger.error(f"Failed to update post status: {e}")
             
@@ -77,9 +73,23 @@ def publish_post(self: Task, post_id: int) -> dict:
             }
 
 
+async def _update_post_status(post_id: int, status: str) -> None:
+    """Update post status in database."""
+    async with async_session() as db:
+        try:
+            result = await db.execute(select(Post).where(Post.id == post_id))
+            post = result.scalar_one_or_none()
+            if post:
+                post.status = status
+                await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
+
 async def _publish_post_async(post_id: int) -> dict:
     """Async implementation of post publishing."""
-    
+
     results = {
         "post_id": post_id,
         "telegram": [],
@@ -87,12 +97,13 @@ async def _publish_post_async(post_id: int) -> dict:
         "rbc": False,
         "errors": [],
     }
-    
+
     # Step 1: Get post from database
     logger.info(f"Fetching post {post_id} from database")
-    with get_db() as db:
-        post = db.get(Post, post_id)
-        
+    async with async_session() as db:
+        result = await db.execute(select(Post).where(Post.id == post_id))
+        post = result.scalar_one_or_none()
+
         if not post:
             logger.error(f"Post {post_id} not found in database")
             return {
@@ -100,7 +111,7 @@ async def _publish_post_async(post_id: int) -> dict:
                 "error": "Post not found",
                 **results,
             }
-        
+
         if post.status == "published":
             logger.warning(f"Post {post_id} is already published")
             return {
@@ -108,20 +119,18 @@ async def _publish_post_async(post_id: int) -> dict:
                 "reason": "already_published",
                 **results,
             }
-        
-        # Get post data
+
         post_title = post.title
         post_text = post.text
         post_image_url = post.image_url
-    
+
     logger.info(f"Publishing post: {post_title}")
-    
+
     # Step 2: Get user settings
-    with get_db() as db:
-        user_settings = db.execute(
-            select(UserSettings).limit(1)
-        ).scalar_one_or_none()
-        
+    async with async_session() as db:
+        result = await db.execute(select(UserSettings).limit(1))
+        user_settings = result.scalar_one_or_none()
+
         if not user_settings:
             logger.warning("No user settings found, using defaults")
             user_settings = UserSettings(
@@ -236,28 +245,31 @@ async def _publish_post_async(post_id: int) -> dict:
     else:
         logger.info("RBC Companies not configured (RBC_LOGIN or RBC_PASSWORD missing)")
     
-    # Step 6: Update post status in database
-    with get_db() as db:
-        post = db.get(Post, post_id)
-        if post:
-            # Determine overall status
-            has_success = (
-                any(r["status"] == "success" for r in results["telegram"])
-                or results["vc"]
-                or results["rbc"]
-            )
-            
-            if has_success:
-                post.status = "published"
-                post.published_at = datetime.utcnow()
-                logger.success(f"Post {post_id} marked as published")
-            else:
-                post.status = "failed"
-                logger.error(f"Post {post_id} marked as failed (no successful publishes)")
-            
-            db.commit()
-    
     # Determine overall result
+    has_success = (
+        any(r["status"] == "success" for r in results["telegram"])
+        or results["vc"]
+        or results["rbc"]
+    )
+
+    # Step 6: Update post status in database
+    async with async_session() as db:
+        try:
+            result = await db.execute(select(Post).where(Post.id == post_id))
+            post = result.scalar_one_or_none()
+            if post:
+                if has_success:
+                    post.status = "published"
+                    post.published_at = datetime.utcnow()
+                    logger.success(f"Post {post_id} marked as published")
+                else:
+                    post.status = "failed"
+                    logger.error(f"Post {post_id} marked as failed (no successful publishes)")
+                await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+
     if results["errors"]:
         status = "partial" if has_success else "failed"
     else:

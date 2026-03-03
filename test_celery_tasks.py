@@ -1,5 +1,6 @@
 """Test script for Celery tasks."""
 
+import asyncio
 import sys
 from pathlib import Path
 
@@ -12,15 +13,15 @@ from loguru import logger
 def test_imports():
     """Test that all modules can be imported."""
     logger.info("Testing imports...")
-    
+
     try:
         from core.config import config
         logger.success("✓ core.config imported")
-        
+
         from models import Source, UserSettings, Article, Post, ParsingHistory
         logger.success("✓ models imported")
-        
-        from core.database import get_db, init_db
+
+        from core.database import async_session, init_db
         logger.success("✓ core.database imported")
         
         from parser import ArticleParser, SerpParser, fetch_links_from_page
@@ -66,26 +67,29 @@ def test_config():
         return False
 
 
+async def _test_db_connection() -> bool:
+    """Async helper to test database connection."""
+    from core.database import async_session, init_db
+    from models import Source
+    from sqlalchemy import func, select
+
+    await init_db()
+    logger.success("✓ Database tables created")
+
+    async with async_session() as db:
+        result = await db.execute(select(func.count()).select_from(Source))
+        count = result.scalar() or 0
+        logger.info(f"Sources in database: {count}")
+        logger.success("✓ Database connection works")
+    return True
+
+
 def test_database():
     """Test database connection."""
     logger.info("Testing database...")
-    
+
     try:
-        from core.database import get_db, init_db
-        from models import Source
-        
-        # Initialize database
-        init_db()
-        logger.success("✓ Database tables created")
-        
-        # Test connection
-        with get_db() as db:
-            count = db.query(Source).count()
-            logger.info(f"Sources in database: {count}")
-            logger.success("✓ Database connection works")
-        
-        return True
-        
+        return asyncio.run(_test_db_connection())
     except Exception as e:
         logger.error(f"✗ Database test failed: {e}")
         return False

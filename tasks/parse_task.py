@@ -10,7 +10,7 @@ from sqlalchemy import select
 
 from tasks.celery_app import celery_app
 from models import Source, UserSettings, Article, Post, ParsingHistory
-from core.database import get_db
+from core.database import async_session
 from parser import ArticleParser, SerpParser, fetch_links_from_page
 from ai import ContentAnalyzer, SEOWriter, SEOChecker, SelfReviewer, NanaBananaGenerator
 from publisher import UTMInjector
@@ -30,7 +30,7 @@ def notify_admin(post_id: int) -> None:
     logger.info(f"TODO: Send notification to admin for post {post_id}")
 
 
-def save_to_history(url: str, status: str, error_message: str = None) -> None:
+async def _save_to_history(url: str, status: str, error_message: str = None) -> None:
     """
     Save parsing attempt to history.
     
@@ -40,14 +40,14 @@ def save_to_history(url: str, status: str, error_message: str = None) -> None:
         error_message: Optional error message
     """
     try:
-        with get_db() as db:
+        async with async_session() as db:
             history = ParsingHistory(
                 url=url,
                 status=status,
                 error_message=error_message,
             )
             db.add(history)
-            db.commit()
+            await db.commit()
             logger.debug(f"Saved parsing history for {url}: {status}")
     except Exception as e:
         logger.error(f"Failed to save parsing history: {e}")
@@ -113,24 +113,24 @@ async def _parse_and_generate_async() -> dict:
     
     # Step 1: Get active sources from database
     logger.info("Fetching active sources from database")
-    with get_db() as db:
-        sources = db.execute(
+    async with async_session() as db:
+        result = await db.execute(
             select(Source).where(Source.is_active == True)
-        ).scalars().all()
-        
+        )
+        sources = result.scalars().all()
+
         if not sources:
             logger.warning("No active sources found in database")
             return {"status": "skipped", "reason": "no_sources", **stats}
-        
+
         logger.info(f"Found {len(sources)} active sources")
     
     # Step 2: Get user settings
     logger.info("Fetching user settings from database")
-    with get_db() as db:
-        user_settings = db.execute(
-            select(UserSettings).limit(1)
-        ).scalar_one_or_none()
-        
+    async with async_session() as db:
+        result = await db.execute(select(UserSettings).limit(1))
+        user_settings = result.scalar_one_or_none()
+
         if not user_settings:
             logger.warning("No user settings found, using defaults")
             user_settings = UserSettings(
@@ -157,11 +157,16 @@ async def _parse_and_generate_async() -> dict:
             stats["sources_processed"] += 1
             
             # Update last parsed time
-            with get_db() as db:
-                db_source = db.get(Source, source.id)
-                if db_source:
-                    db_source.last_parsed_at = datetime.utcnow()
-                    db.commit()
+            async with async_session() as db:
+                try:
+                    result = await db.execute(select(Source).where(Source.id == source.id))
+                    db_source = result.scalar_one_or_none()
+                    if db_source:
+                        db_source.last_parsed_at = datetime.utcnow()
+                        await db.commit()
+                except Exception:
+                    await db.rollback()
+                    raise
                     
         except Exception as e:
             logger.error(f"Error fetching links from {source.url}: {e}")
@@ -189,10 +194,11 @@ async def _parse_and_generate_async() -> dict:
         return {"status": "completed", **stats}
     
     # Step 5: Filter out already existing articles
-    with get_db() as db:
-        existing_urls = db.execute(
-            select(Article.url).where(Article.url.in_(all_urls))
-        ).scalars().all()
+    async with async_session() as db:
+        result = await db.execute(
+            select(Article.url).where(Article.url.in_(list(all_urls)))
+        )
+        existing_urls = result.scalars().all()
         existing_urls_set = set(existing_urls)
     
     new_urls = all_urls - existing_urls_set
@@ -209,29 +215,33 @@ async def _parse_and_generate_async() -> dict:
             html = await ArticleParser.fetch_html(url)
             if not html:
                 logger.warning(f"Failed to fetch HTML for {url}")
-                save_to_history(url, "failed", "Could not fetch HTML")
+                await _save_to_history(url, "failed", "Could not fetch HTML")
                 stats["errors"] += 1
                 continue
             
             article_data = ArticleParser.parse_article(html, url)
             if not article_data:
                 logger.warning(f"Failed to parse article from {url}")
-                save_to_history(url, "failed", "Could not parse article")
+                await _save_to_history(url, "failed", "Could not parse article")
                 stats["errors"] += 1
                 continue
             
             # Save article to database
-            with get_db() as db:
-                article = Article(
-                    url=url,
-                    title=article_data.get("title"),
-                    content=article_data.get("content"),
-                    is_processed=False,
-                )
-                db.add(article)
-                db.commit()
-                db.refresh(article)
-                article_id = article.id
+            async with async_session() as db:
+                try:
+                    article = Article(
+                        url=url,
+                        title=article_data.get("title"),
+                        content=article_data.get("content"),
+                        is_processed=False,
+                    )
+                    db.add(article)
+                    await db.commit()
+                    await db.refresh(article)
+                    article_id = article.id
+                except Exception:
+                    await db.rollback()
+                    raise
             
             stats["articles_parsed"] += 1
             logger.info(f"Saved article {article_id}: {article_data.get('title')}")
@@ -272,25 +282,30 @@ async def _parse_and_generate_async() -> dict:
             )
             
             # Save post to database
-            with get_db() as db:
-                post = Post(
-                    article_id=article_id,
-                    title=article_data.get("title"),
-                    text=text,
-                    image_url=image_url,
-                    status="pending",
-                )
-                db.add(post)
-                db.commit()
-                db.refresh(post)
-                post_id = post.id
-                
-                # Mark article as processed
-                article = db.get(Article, article_id)
-                if article:
-                    article.is_processed = True
-                    article.processed_at = datetime.utcnow()
-                    db.commit()
+            async with async_session() as db:
+                try:
+                    post = Post(
+                        article_id=article_id,
+                        title=article_data.get("title"),
+                        text=text,
+                        image_url=image_url,
+                        status="pending",
+                    )
+                    db.add(post)
+                    await db.commit()
+                    await db.refresh(post)
+                    post_id = post.id
+
+                    # Mark article as processed
+                    ar_result = await db.execute(select(Article).where(Article.id == article_id))
+                    article = ar_result.scalar_one_or_none()
+                    if article:
+                        article.is_processed = True
+                        article.processed_at = datetime.utcnow()
+                        await db.commit()
+                except Exception:
+                    await db.rollback()
+                    raise
             
             stats["posts_created"] += 1
             logger.success(f"Created post {post_id} from article {article_id}")
@@ -304,11 +319,11 @@ async def _parse_and_generate_async() -> dict:
                 logger.info(f"Notifying admin about post {post_id}")
                 notify_admin(post_id)
             
-            save_to_history(url, "success")
-            
+            await _save_to_history(url, "success")
+
         except Exception as e:
             logger.error(f"Error processing {url}: {e}")
-            save_to_history(url, "failed", str(e))
+            await _save_to_history(url, "failed", str(e))
             stats["errors"] += 1
             continue
     

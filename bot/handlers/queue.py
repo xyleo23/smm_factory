@@ -8,7 +8,7 @@ from sqlalchemy import select
 from bot.keyboards.approval import PostActionCallback, get_approval_keyboard
 from bot.keyboards.main import get_main_keyboard
 from models import Post
-from core.database import get_db
+from core.database import async_session
 from tasks.publish_task import publish_post
 
 router = Router(name="queue")
@@ -20,17 +20,14 @@ PREVIEW_LENGTH = 300
 
 @router.callback_query(F.data == "queue")
 async def cb_queue(callback: CallbackQuery, bot: Bot) -> None:
-    with get_db() as db:
-        posts = (
-            db.execute(
-                select(Post)
-                .where(Post.status == "pending")
-                .order_by(Post.created_at.desc())
-                .limit(5)
-            )
-            .scalars()
-            .all()
+    async with async_session() as db:
+        result = await db.execute(
+            select(Post)
+            .where(Post.status == "pending")
+            .order_by(Post.created_at.desc())
+            .limit(5)
         )
+        posts = result.scalars().all()
         posts_data = [
             {
                 "id": p.id,
@@ -98,13 +95,18 @@ async def cb_queue(callback: CallbackQuery, bot: Bot) -> None:
 @router.callback_query(PostActionCallback.filter(F.action == "approve"))
 async def cb_approve(callback: CallbackQuery, callback_data: PostActionCallback) -> None:
     post_id = callback_data.post_id
-    with get_db() as db:
-        post = db.get(Post, post_id)
-        if post is None:
-            await callback.answer("Пост не найден")
-            return
-        post.status = "approved"
-        db.commit()
+    async with async_session() as db:
+        try:
+            result = await db.execute(select(Post).where(Post.id == post_id))
+            post = result.scalar_one_or_none()
+            if post is None:
+                await callback.answer("Пост не найден")
+                return
+            post.status = "approved"
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
     try:
         publish_post.delay(post_id)
@@ -121,14 +123,20 @@ async def cb_approve(callback: CallbackQuery, callback_data: PostActionCallback)
 @router.callback_query(PostActionCallback.filter(F.action == "rewrite"))
 async def cb_rewrite(callback: CallbackQuery, callback_data: PostActionCallback) -> None:
     post_id = callback_data.post_id
-    with get_db() as db:
-        post = db.get(Post, post_id)
-        if post is None:
-            await callback.answer("Пост не найден")
-            return
-        article_id = post.article_id
-        post.status = "rejected"
-        db.commit()
+    article_id = None
+    async with async_session() as db:
+        try:
+            result = await db.execute(select(Post).where(Post.id == post_id))
+            post = result.scalar_one_or_none()
+            if post is None:
+                await callback.answer("Пост не найден")
+                return
+            article_id = post.article_id
+            post.status = "rejected"
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
 
     if article_id:
         try:
@@ -152,12 +160,17 @@ async def cb_rewrite(callback: CallbackQuery, callback_data: PostActionCallback)
 @router.callback_query(PostActionCallback.filter(F.action == "delete"))
 async def cb_delete(callback: CallbackQuery, callback_data: PostActionCallback) -> None:
     post_id = callback_data.post_id
-    with get_db() as db:
-        post = db.get(Post, post_id)
-        if post:
-            post.status = "rejected"
-            db.commit()
-            logger.info(f"Post {post_id} rejected/deleted by user")
+    async with async_session() as db:
+        try:
+            result = await db.execute(select(Post).where(Post.id == post_id))
+            post = result.scalar_one_or_none()
+            if post:
+                post.status = "rejected"
+                await db.commit()
+                logger.info(f"Post {post_id} rejected/deleted by user")
+        except Exception:
+            await db.rollback()
+            raise
 
     await callback.message.delete()
     await callback.answer("🗑 Пост удалён")

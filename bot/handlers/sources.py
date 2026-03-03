@@ -9,17 +9,20 @@ from sqlalchemy import select
 from bot.keyboards.sources import SourceActionCallback, get_sources_keyboard
 from bot.states import SourceStates
 from models import Source
-from core.database import get_db
+from core.database import async_session
 
 router = Router(name="sources")
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _get_sources() -> list[dict]:
+async def _get_sources() -> list[dict]:
     """Return all sources as plain dicts (session-safe)."""
-    with get_db() as db:
-        rows = db.execute(select(Source).order_by(Source.created_at.desc())).scalars().all()
+    async with async_session() as db:
+        result = await db.execute(
+            select(Source).order_by(Source.created_at.desc())
+        )
+        rows = result.scalars().all()
         return [
             {
                 "id": r.id,
@@ -42,9 +45,10 @@ def _sources_text(sources: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _source_exists(url: str) -> bool:
-    with get_db() as db:
-        row = db.execute(select(Source).where(Source.url == url)).scalar_one_or_none()
+async def _source_exists(url: str) -> bool:
+    async with async_session() as db:
+        result = await db.execute(select(Source).where(Source.url == url))
+        row = result.scalar_one_or_none()
         return row is not None
 
 
@@ -52,7 +56,7 @@ def _source_exists(url: str) -> bool:
 
 @router.callback_query(F.data == "sources")
 async def cb_sources(callback: CallbackQuery) -> None:
-    sources_dicts = _get_sources()
+    sources_dicts = await _get_sources()
 
     # Build ORM-like objects for the keyboard (just need id + is_active + name + url)
     class _SourceProxy:
@@ -74,7 +78,7 @@ async def cb_sources(callback: CallbackQuery) -> None:
 
 async def _refresh_sources(callback: CallbackQuery) -> None:
     """Re-render the sources list in the current message."""
-    sources_dicts = _get_sources()
+    sources_dicts = await _get_sources()
 
     class _SourceProxy:
         def __init__(self, d: dict):
@@ -96,16 +100,21 @@ async def _refresh_sources(callback: CallbackQuery) -> None:
 @router.callback_query(SourceActionCallback.filter(F.action == "toggle"))
 async def cb_source_toggle(callback: CallbackQuery, callback_data: SourceActionCallback) -> None:
     source_id = callback_data.source_id
-    with get_db() as db:
-        source = db.get(Source, source_id)
-        if source:
-            source.is_active = not source.is_active
-            db.commit()
-            status = "активирован ✅" if source.is_active else "деактивирован ❌"
-            logger.info(f"Source {source_id} {status}")
-            await callback.answer(f"Источник {status}")
-        else:
-            await callback.answer("Источник не найден")
+    async with async_session() as db:
+        try:
+            result = await db.execute(select(Source).where(Source.id == source_id))
+            source = result.scalar_one_or_none()
+            if source:
+                source.is_active = not source.is_active
+                await db.commit()
+                status = "активирован ✅" if source.is_active else "деактивирован ❌"
+                logger.info(f"Source {source_id} {status}")
+                await callback.answer(f"Источник {status}")
+            else:
+                await callback.answer("Источник не найден")
+        except Exception:
+            await db.rollback()
+            raise
 
     await _refresh_sources(callback)
 
@@ -113,15 +122,20 @@ async def cb_source_toggle(callback: CallbackQuery, callback_data: SourceActionC
 @router.callback_query(SourceActionCallback.filter(F.action == "delete"))
 async def cb_source_delete(callback: CallbackQuery, callback_data: SourceActionCallback) -> None:
     source_id = callback_data.source_id
-    with get_db() as db:
-        source = db.get(Source, source_id)
-        if source:
-            db.delete(source)
-            db.commit()
-            logger.info(f"Source {source_id} deleted")
-            await callback.answer("Источник удалён 🗑")
-        else:
-            await callback.answer("Источник не найден")
+    async with async_session() as db:
+        try:
+            result = await db.execute(select(Source).where(Source.id == source_id))
+            source = result.scalar_one_or_none()
+            if source:
+                db.delete(source)
+                await db.commit()
+                logger.info(f"Source {source_id} deleted")
+                await callback.answer("Источник удалён 🗑")
+            else:
+                await callback.answer("Источник не найден")
+        except Exception:
+            await db.rollback()
+            raise
 
     await _refresh_sources(callback)
 
@@ -149,7 +163,7 @@ async def msg_source_url(message: Message, state: FSMContext) -> None:
         )
         return
 
-    if _source_exists(url):
+    if await _source_exists(url):
         await message.answer(
             f"⚠️ Источник <code>{url}</code> уже существует в базе.",
             parse_mode="HTML",
@@ -172,17 +186,21 @@ async def msg_source_name(message: Message, state: FSMContext) -> None:
     name_input = message.text.strip()
     name = None if name_input == "-" else name_input
 
-    with get_db() as db:
-        source = Source(url=url, name=name, is_active=True)
-        db.add(source)
-        db.commit()
-        db.refresh(source)
-        source_id = source.id
+    async with async_session() as db:
+        try:
+            source = Source(url=url, name=name, is_active=True)
+            db.add(source)
+            await db.commit()
+            await db.refresh(source)
+            source_id = source.id
+        except Exception:
+            await db.rollback()
+            raise
 
     await state.clear()
     logger.info(f"Added source {source_id}: {name or url}")
 
-    sources_dicts = _get_sources()
+    sources_dicts = await _get_sources()
 
     class _SourceProxy:
         def __init__(self, d: dict):

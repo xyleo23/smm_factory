@@ -8,7 +8,7 @@ from sqlalchemy import func, select
 
 from bot.keyboards.main import get_main_keyboard
 from models import Article, Post, Source
-from core.database import get_db
+from core.database import async_session
 
 router = Router(name="stats")
 
@@ -17,51 +17,57 @@ router = Router(name="stats")
 async def cb_stats(callback: CallbackQuery) -> None:
     seven_days_ago = datetime.utcnow() - timedelta(days=7)
 
-    with get_db() as db:
+    async with async_session() as db:
         # Articles parsed in the last 7 days
-        articles_count: int = db.execute(
+        r1 = await db.execute(
             select(func.count()).select_from(Article).where(
                 Article.parsed_at >= seven_days_ago
             )
-        ).scalar() or 0
+        )
+        articles_count: int = r1.scalar() or 0
 
         # Posts generated in the last 7 days
-        posts_count: int = db.execute(
+        r2 = await db.execute(
             select(func.count()).select_from(Post).where(
                 Post.created_at >= seven_days_ago
             )
-        ).scalar() or 0
+        )
+        posts_count: int = r2.scalar() or 0
 
         # Published posts
-        published_count: int = db.execute(
+        r3 = await db.execute(
             select(func.count()).select_from(Post).where(
                 Post.created_at >= seven_days_ago,
                 Post.status == "published",
             )
-        ).scalar() or 0
+        )
+        published_count: int = r3.scalar() or 0
 
         # Rejected posts
-        rejected_count: int = db.execute(
+        r4 = await db.execute(
             select(func.count()).select_from(Post).where(
                 Post.created_at >= seven_days_ago,
                 Post.status == "rejected",
             )
-        ).scalar() or 0
+        )
+        rejected_count: int = r4.scalar() or 0
 
         # Currently pending
-        pending_count: int = db.execute(
+        r5 = await db.execute(
             select(func.count()).select_from(Post).where(Post.status == "pending")
-        ).scalar() or 0
+        )
+        pending_count: int = r5.scalar() or 0
 
         # Top-3 sources by article count over last 7 days
-        top_sources = db.execute(
+        r6 = await db.execute(
             select(Source.name, Source.url, func.count(Article.id).label("cnt"))
             .join(Article, Source.id == Article.source_id)
             .where(Article.parsed_at >= seven_days_ago)
             .group_by(Source.id, Source.name, Source.url)
             .order_by(func.count(Article.id).desc())
             .limit(3)
-        ).all()
+        )
+        top_sources = r6.all()
 
     if top_sources:
         top_lines = "\n".join(
