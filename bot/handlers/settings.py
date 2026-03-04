@@ -77,9 +77,8 @@ async def _refresh_settings_message(callback: CallbackQuery, user_id: int) -> No
             reply_markup=get_settings_keyboard(settings_obj),
             parse_mode="HTML",
         )
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            raise
+    except TelegramBadRequest:
+        pass
 
 
 # ── open settings panel ───────────────────────────────────────────────────────
@@ -90,11 +89,14 @@ async def cb_open_settings(callback: CallbackQuery) -> None:
     settings_dict = await get_or_create_settings(user_id)
     settings_obj = await _load_settings_model(user_id)
 
-    await callback.message.edit_text(
-        text=settings_text(settings_dict),
-        reply_markup=get_settings_keyboard(settings_obj),
-        parse_mode="HTML",
-    )
+    try:
+        await callback.message.edit_text(
+            text=settings_text(settings_dict),
+            reply_markup=get_settings_keyboard(settings_obj),
+            parse_mode="HTML",
+        )
+    except TelegramBadRequest:
+        pass
     await callback.answer()
 
 
