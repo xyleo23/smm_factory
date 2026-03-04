@@ -22,9 +22,10 @@ CANCEL_TEXT = "Отправьте /start для возврата в главно
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 async def _load_settings_model(user_id: int) -> UserSettings:
-    """Return the ORM object (still attached to a fresh session snapshot)."""
+    """Return the ORM object with fresh data from DB (no stale cache)."""
     async with async_session() as db:
         try:
+            db.expire_all()  # Clear any cached state before read
             result = await db.execute(
                 select(UserSettings).where(UserSettings.id == user_id)
             )
@@ -34,6 +35,8 @@ async def _load_settings_model(user_id: int) -> UserSettings:
                 db.add(s)
                 await db.commit()
                 await db.refresh(s)
+            else:
+                await db.refresh(s)  # Force re-fetch from DB after external commit
             db.expunge(s)
             return s
         except Exception:

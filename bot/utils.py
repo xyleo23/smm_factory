@@ -23,6 +23,9 @@ async def get_or_create_settings(user_id: int) -> dict:
                 db.add(settings)
                 await db.commit()
                 await db.refresh(settings)
+            else:
+                db.expire_all()
+                await db.refresh(settings)  # Force fresh read, avoid stale cache
 
             return {
                 "id": settings.id,
