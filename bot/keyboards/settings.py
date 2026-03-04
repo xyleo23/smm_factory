@@ -2,7 +2,7 @@
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from models import UserSettings
+from models.settings import UserSettings
 
 TONES: dict[str, str] = {
     "professional": "Проф.",

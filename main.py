@@ -34,8 +34,10 @@ async def _seed_default_settings() -> None:
         try:
             result = await db.execute(select(UserSettings))
             if not result.scalars().first():
+                admin_id = int(config.admin_chat_id) if config.admin_chat_id else None
                 db.add(
                     UserSettings(
+                        user_id=admin_id,
                         tone="professional",
                         selected_llm="gpt-4",
                         is_auto_publish=False,

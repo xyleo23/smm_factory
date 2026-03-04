@@ -11,7 +11,7 @@ from bot.keyboards.main import get_main_keyboard
 from bot.keyboards.settings import get_back_keyboard, get_settings_keyboard
 from bot.states import SettingsStates
 from bot.utils import get_or_create_settings, settings_text
-from models import UserSettings
+from models.settings import UserSettings
 from core.database import async_session
 
 router = Router(name="settings")
@@ -27,11 +27,11 @@ async def _load_settings_model(user_id: int) -> UserSettings:
         try:
             db.expire_all()  # Clear any cached state before read
             result = await db.execute(
-                select(UserSettings).where(UserSettings.id == user_id)
+                select(UserSettings).where(UserSettings.user_id == user_id)
             )
             s = result.scalars().first()
             if s is None:
-                s = UserSettings()
+                s = UserSettings(user_id=user_id)
                 db.add(s)
                 await db.commit()
                 await db.refresh(s)
@@ -49,11 +49,11 @@ async def _update_settings(user_id: int, **kwargs) -> None:
     async with async_session() as db:
         try:
             result = await db.execute(
-                select(UserSettings).where(UserSettings.id == user_id)
+                select(UserSettings).where(UserSettings.user_id == user_id)
             )
             s = result.scalars().first()
             if s is None:
-                s = UserSettings(**kwargs)
+                s = UserSettings(user_id=user_id, **kwargs)
                 db.add(s)
             else:
                 for key, value in kwargs.items():

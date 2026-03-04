@@ -8,6 +8,7 @@ class UserSettings(Base):
     __tablename__ = "user_settings"
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    user_id: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True, index=True)
     tone: Mapped[str] = mapped_column(String(128), default="Экспертный", nullable=False)
     is_auto_publish: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     parse_interval_minutes: Mapped[int] = mapped_column(Integer, default=60, nullable=False)

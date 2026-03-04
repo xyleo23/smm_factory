@@ -14,12 +14,12 @@ async def get_or_create_settings(user_id: int) -> dict:
     async with async_session() as db:
         try:
             result = await db.execute(
-                select(UserSettings).where(UserSettings.id == user_id)
+                select(UserSettings).where(UserSettings.user_id == user_id)
             )
             settings = result.scalars().first()
 
             if not settings:
-                settings = UserSettings()
+                settings = UserSettings(user_id=user_id)
                 db.add(settings)
                 await db.commit()
                 await db.refresh(settings)
