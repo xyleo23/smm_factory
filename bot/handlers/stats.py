@@ -7,7 +7,7 @@ from aiogram.types import CallbackQuery
 from sqlalchemy import func, select
 
 from bot.keyboards.main import get_main_keyboard
-from models import Article, Post, Source
+from models import Article, Post, PostStatus, Source
 from core.database import async_session
 
 router = Router(name="stats")
@@ -38,7 +38,7 @@ async def cb_stats(callback: CallbackQuery) -> None:
         r3 = await db.execute(
             select(func.count()).select_from(Post).where(
                 Post.created_at >= seven_days_ago,
-                Post.status == "published",
+                Post.status == PostStatus.PUBLISHED.value,
             )
         )
         published_count: int = r3.scalar() or 0
@@ -47,14 +47,14 @@ async def cb_stats(callback: CallbackQuery) -> None:
         r4 = await db.execute(
             select(func.count()).select_from(Post).where(
                 Post.created_at >= seven_days_ago,
-                Post.status == "rejected",
+                Post.status == PostStatus.REJECTED.value,
             )
         )
         rejected_count: int = r4.scalar() or 0
 
         # Currently pending
         r5 = await db.execute(
-            select(func.count()).select_from(Post).where(Post.status == "pending")
+            select(func.count()).select_from(Post).where(Post.status == PostStatus.PENDING.value)
         )
         pending_count: int = r5.scalar() or 0
 

@@ -1,7 +1,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from sqlalchemy import DateTime, Enum as SqlEnum, ForeignKey, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from core.database import Base
@@ -21,9 +21,9 @@ class Post(Base):
     article_id: Mapped[int] = mapped_column(ForeignKey("articles.id"), nullable=False, index=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     image_url: Mapped[str | None] = mapped_column(String(1024), nullable=True)
-    status: Mapped[PostStatus] = mapped_column(
-        SqlEnum(PostStatus, name="post_status"),
-        default=PostStatus.PENDING,
+    status: Mapped[str] = mapped_column(
+        String,
+        default=PostStatus.PENDING.value,
         nullable=False,
     )
     created_at: Mapped[datetime] = mapped_column(

@@ -5,7 +5,7 @@ from loguru import logger
 from sqlalchemy import func, select
 
 from core.database import async_session, init_db
-from models import Source, UserSettings, Article, Post
+from models import Source, UserSettings, Article, Post, PostStatus
 from tasks import parse_and_generate, publish_post
 
 
@@ -87,7 +87,7 @@ async def _get_or_create_test_post() -> int:
     async with async_session() as db:
         try:
             result = await db.execute(
-                select(Post).where(Post.status == "pending").limit(1)
+                select(Post).where(Post.status == PostStatus.PENDING.value).limit(1)
             )
             post = result.scalar_one_or_none()
 
@@ -99,7 +99,7 @@ async def _get_or_create_test_post() -> int:
                     title="Test Post",
                     text="# Test Post\n\nThis is a test post created by the worker script.",
                     image_url="https://via.placeholder.com/1200x630",
-                    status="pending",
+                    status=PostStatus.PENDING.value,
                 )
                 db.add(post)
                 await db.commit()

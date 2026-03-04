@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from bot.keyboards.approval import PostActionCallback, get_approval_keyboard
 from bot.keyboards.main import get_main_keyboard
-from models import Post
+from models import Post, PostStatus
 from core.database import async_session
 from tasks.publish_task import publish_post
 
@@ -23,7 +23,7 @@ async def cb_queue(callback: CallbackQuery, bot: Bot) -> None:
     async with async_session() as db:
         result = await db.execute(
             select(Post)
-            .where(Post.status == "pending")
+            .where(Post.status == PostStatus.PENDING.value)
             .order_by(Post.created_at.desc())
             .limit(5)
         )
@@ -102,7 +102,7 @@ async def cb_approve(callback: CallbackQuery, callback_data: PostActionCallback)
             if post is None:
                 await callback.answer("Пост не найден")
                 return
-            post.status = "approved"
+            post.status = PostStatus.APPROVED.value
             await db.commit()
         except Exception:
             await db.rollback()
@@ -132,7 +132,7 @@ async def cb_rewrite(callback: CallbackQuery, callback_data: PostActionCallback)
                 await callback.answer("Пост не найден")
                 return
             article_id = post.article_id
-            post.status = "rejected"
+            post.status = PostStatus.REJECTED.value
             await db.commit()
         except Exception:
             await db.rollback()
@@ -165,7 +165,7 @@ async def cb_delete(callback: CallbackQuery, callback_data: PostActionCallback) 
             result = await db.execute(select(Post).where(Post.id == post_id))
             post = result.scalar_one_or_none()
             if post:
-                post.status = "rejected"
+                post.status = PostStatus.REJECTED.value
                 await db.commit()
                 logger.info(f"Post {post_id} rejected/deleted by user")
         except Exception:
