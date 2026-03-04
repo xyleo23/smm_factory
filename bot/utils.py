@@ -25,16 +25,16 @@ async def get_or_create_settings(user_id: int) -> dict:
                 await db.refresh(settings)
             else:
                 db.expire_all()
-                await db.refresh(settings)  # Force fresh read, avoid stale cache
+                await db.refresh(settings)
 
             return {
                 "id": settings.id,
-                "serp_keywords": settings.serp_keywords or [],
-                "internal_links": settings.internal_links or [],
+                "serp_keywords": [k.strip() for k in settings.serp_keywords.split(",") if k.strip()] if settings.serp_keywords else [],
+                "internal_links": [l.strip() for l in settings.internal_links.split(",") if l.strip()] if settings.internal_links else [],
                 "utm_template": settings.utm_template,
                 "tone": settings.tone,
                 "selected_llm": settings.selected_llm,
-                "tg_channels": settings.tg_channels or [],
+                "tg_channels": [c.strip() for c in settings.tg_channels.split(",") if c.strip()] if settings.tg_channels else [],
                 "is_auto_publish": settings.is_auto_publish,
             }
         except Exception:

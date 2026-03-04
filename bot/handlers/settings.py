@@ -153,7 +153,7 @@ async def cb_ask_serp_keys(callback: CallbackQuery, state: FSMContext) -> None:
 async def msg_serp_keys(message: Message, state: FSMContext) -> None:
     keywords = [k.strip() for k in message.text.split(",") if k.strip()]
     user_id = message.from_user.id
-    await _update_settings(user_id, serp_keywords=keywords)
+    await _update_settings(user_id, serp_keywords=",".join(keywords))
     await state.clear()
     logger.info(f"User {user_id} set SERP keywords: {keywords}")
 
@@ -217,7 +217,7 @@ async def cb_ask_links(callback: CallbackQuery, state: FSMContext) -> None:
 async def msg_links(message: Message, state: FSMContext) -> None:
     links = [lnk.strip() for lnk in message.text.split(",") if lnk.strip()]
     user_id = message.from_user.id
-    await _update_settings(user_id, internal_links=links)
+    await _update_settings(user_id, internal_links=",".join(links))
     await state.clear()
     logger.info(f"User {user_id} set internal links: {links}")
 
@@ -249,7 +249,7 @@ async def cb_ask_channels(callback: CallbackQuery, state: FSMContext) -> None:
 async def msg_channels(message: Message, state: FSMContext) -> None:
     channels = [ch.strip() for ch in message.text.split(",") if ch.strip()]
     user_id = message.from_user.id
-    await _update_settings(user_id, tg_channels=channels)
+    await _update_settings(user_id, tg_channels=",".join(channels))
     await state.clear()
     logger.info(f"User {user_id} set TG channels: {channels}")
 

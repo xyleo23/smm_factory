@@ -1,7 +1,6 @@
 """SMM Factory — root entry point.
 
-Loads config, initialises the database, seeds default UserSettings if the
-table is empty, wires up all aiogram routers and starts long-polling.
+Loads config, initialises the database, wires up all aiogram routers and starts long-polling.
 """
 
 import asyncio
@@ -28,33 +27,6 @@ from bot.handlers import queue as queue_handler
 from bot.handlers import stats as stats_handler
 
 
-async def _seed_default_settings() -> None:
-    """Insert a default UserSettings row when the table is empty."""
-    async with async_session() as db:
-        try:
-            result = await db.execute(select(UserSettings))
-            if not result.scalars().first():
-                admin_id = int(config.admin_chat_id) if config.admin_chat_id else None
-                db.add(
-                    UserSettings(
-                        user_id=admin_id,
-                        tone="professional",
-                        selected_llm="gpt-4",
-                        is_auto_publish=False,
-                        parse_interval_minutes=60,
-                        serp_keywords=None,
-                        internal_links=None,
-                        tg_channels=None,
-                        utm_template=None,
-                    )
-                )
-                await db.commit()
-                logger.info("Seeded default UserSettings.")
-        except Exception:
-            await db.rollback()
-            raise
-
-
 async def on_startup(bot: Bot) -> None:
     me = await bot.get_me()
     logger.info("SMM Factory started — @{} (id={}).", me.username, me.id)
@@ -73,9 +45,8 @@ async def main() -> None:
         )
         sys.exit(1)
 
-    # Initialise DB tables and seed defaults
+    # Initialise DB tables
     await init_db()
-    await _seed_default_settings()
 
     bot = Bot(
         token=token,
