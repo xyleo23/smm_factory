@@ -10,6 +10,10 @@ from loguru import logger
 
 from core.config import config
 from core.database import init_db
+from models.article import Article
+from models.post import Post
+from models.settings import UserSettings
+from models.source import Source
 
 from bot.handlers import main as main_handler
 from bot.handlers import settings as settings_handler
@@ -24,8 +28,8 @@ async def main() -> None:
             "TELEGRAM_BOT_TOKEN is not set. Add it to your .env file."
         )
 
-    # Ensure DB tables exist
-    init_db()
+    # Ensure DB tables exist (models must be imported above for create_all)
+    await init_db()
 
     bot = Bot(
         token=config.telegram_bot_token,

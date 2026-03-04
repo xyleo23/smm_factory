@@ -16,7 +16,10 @@ from sqlalchemy import select
 
 from core.config import config
 from core.database import async_session, init_db
+from models.article import Article
+from models.post import Post
 from models.settings import UserSettings
+from models.source import Source
 
 from bot.handlers import main as main_handler
 from bot.handlers import settings as settings_handler
