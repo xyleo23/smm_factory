@@ -35,6 +35,7 @@ async def get_or_create_settings(user_id: int) -> dict:
                 "tone": settings.tone,
                 "selected_llm": settings.selected_llm,
                 "tg_channels": [c.strip() for c in settings.tg_channels.split(",") if c.strip()] if settings.tg_channels else [],
+                "keywords": [k.strip() for k in settings.keywords.split(",") if k.strip()] if settings.keywords else [],
                 "is_auto_publish": settings.is_auto_publish,
             }
         except Exception:

@@ -17,6 +17,13 @@ from publisher import UTMInjector
 from tasks.publish_task import publish_post
 
 
+def parse_comma_separated(value: str | None) -> list[str]:
+    """Parse comma-separated string into list of strings."""
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def notify_admin(post_id: int) -> None:
     """
     Send notification to admin about new post ready for review.
@@ -125,25 +132,25 @@ async def _parse_and_generate_async() -> dict:
 
         logger.info(f"Found {len(sources)} active sources")
     
-    # Step 2: Get user settings
+    # Step 2: Get user settings (first user or use defaults)
     logger.info("Fetching user settings from database")
     async with async_session() as db:
         result = await db.execute(select(UserSettings).limit(1))
         user_settings = result.scalar_one_or_none()
 
         if not user_settings:
-            logger.warning("No user settings found, using defaults")
-            user_settings = UserSettings(
-                user_id=1,
-                serp_keywords=[],
-                internal_links=[],
-                utm_template="?utm_source=auto&utm_medium=post",
-                tone="professional",
-                keywords=[],
-                selected_llm="gpt-4",
-                tg_channels=[],
-                is_auto_publish=False,
-            )
+            logger.warning("No user settings found in database")
+            # Return early - cannot proceed without settings
+            return {
+                "status": "error",
+                "message": "No user settings configured. Please configure settings in bot first.",
+                **stats,
+            }
+    
+    # Parse user settings string fields to lists
+    serp_keywords = parse_comma_separated(user_settings.serp_keywords)
+    internal_links = parse_comma_separated(user_settings.internal_links)
+    keywords = parse_comma_separated(user_settings.keywords)
     
     # Step 3: Collect URLs from sources
     logger.info("Collecting URLs from sources")
@@ -174,10 +181,10 @@ async def _parse_and_generate_async() -> dict:
             continue
     
     # Step 4: Collect URLs from SERP keywords
-    if user_settings.serp_keywords:
-        logger.info(f"Searching SERP for {len(user_settings.serp_keywords)} keywords")
+    if serp_keywords:
+        logger.info(f"Searching SERP for {len(serp_keywords)} keywords")
         
-        for keyword in user_settings.serp_keywords:
+        for keyword in serp_keywords:
             try:
                 serp_urls = await SerpParser.search_all(keyword)
                 all_urls.update(serp_urls)
@@ -256,12 +263,12 @@ async def _parse_and_generate_async() -> dict:
             text = await SEOWriter.write(
                 analysis=analysis,
                 tone=user_settings.tone,
-                keywords=user_settings.keywords,
+                keywords=keywords,
                 llm=user_settings.selected_llm,
             )
             
             # Check SEO
-            seo_result = SEOChecker.check(text, user_settings.keywords)
+            seo_result = SEOChecker.check(text, keywords)
             
             # Review if SEO check failed
             if not seo_result["passed"]:
@@ -271,7 +278,7 @@ async def _parse_and_generate_async() -> dict:
             # Inject UTM parameters
             text = utm_injector.inject(
                 text,
-                user_settings.internal_links,
+                internal_links,
                 user_settings.utm_template,
             )
             

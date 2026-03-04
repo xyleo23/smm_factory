@@ -19,3 +19,4 @@ class UserSettings(Base):
         String(255), default="anthropic/claude-3-5-sonnet", nullable=False
     )
     tg_channels: Mapped[str | None] = mapped_column(Text, nullable=True)
+    keywords: Mapped[str | None] = mapped_column(Text, nullable=True)

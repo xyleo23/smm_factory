@@ -51,16 +51,13 @@ async def _setup_database() -> None:
 
                 settings = UserSettings(
                     user_id=1,
-                    serp_keywords=["маркетинг", "smm", "контент-маркетинг"],
-                    internal_links=[
-                        "https://example.com/blog",
-                        "https://example.com/services",
-                    ],
+                    serp_keywords="маркетинг,smm,контент-маркетинг",
+                    internal_links="https://example.com/blog,https://example.com/services",
                     utm_template="?utm_source=telegram&utm_medium=post&utm_campaign=auto",
                     tone="professional",
-                    keywords=["маркетинг", "smm", "контент"],
+                    keywords="маркетинг,smm,контент",
                     selected_llm="gpt-4",
-                    tg_channels=["@your_channel"],
+                    tg_channels="@your_channel",
                     is_auto_publish=False,
                 )
 

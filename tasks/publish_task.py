@@ -15,6 +15,13 @@ from publisher import TelegramPublisher, VCPublisher, RBCPublisher
 from core.config import config
 
 
+def parse_comma_separated(value: str | None) -> list[str]:
+    """Parse comma-separated string into list of strings."""
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def publish_post(self: Task, post_id: int) -> dict:
     """
@@ -132,16 +139,20 @@ async def _publish_post_async(post_id: int) -> dict:
         user_settings = result.scalar_one_or_none()
 
         if not user_settings:
-            logger.warning("No user settings found, using defaults")
-            user_settings = UserSettings(
-                user_id=1,
-                tg_channels=[],
-                is_auto_publish=False,
-            )
+            logger.warning("No user settings found in database")
+            # Return early - cannot proceed without settings
+            return {
+                "status": "error",
+                "message": "No user settings configured. Please configure settings in bot first.",
+                **results,
+            }
+    
+    # Parse tg_channels from comma-separated string
+    tg_channels = parse_comma_separated(user_settings.tg_channels)
     
     # Step 3: Publish to Telegram channels
-    if user_settings.tg_channels:
-        logger.info(f"Publishing to {len(user_settings.tg_channels)} Telegram channels")
+    if tg_channels:
+        logger.info(f"Publishing to {len(tg_channels)} Telegram channels")
         
         if not config.telegram_bot_token:
             logger.error("TELEGRAM_BOT_TOKEN not configured")
@@ -151,7 +162,7 @@ async def _publish_post_async(post_id: int) -> dict:
             tg_publisher = TelegramPublisher()
             
             try:
-                for channel_id in user_settings.tg_channels:
+                for channel_id in tg_channels:
                     try:
                         logger.info(f"Publishing to Telegram channel: {channel_id}")
                         success = await tg_publisher.publish(
