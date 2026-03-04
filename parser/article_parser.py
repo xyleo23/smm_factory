@@ -18,13 +18,22 @@ class ArticleParser:
     async def fetch_html(cls, url: str) -> Optional[str]:
         """
         Fetch HTML content from URL.
-        
+        Tries httpx first; on None or 403/429/503 falls back to Playwright.
+
         Args:
             url: URL to fetch
-            
+
         Returns:
             HTML content or None if failed
         """
+        html = await cls._fetch_httpx(url)
+        if html:
+            return html
+        return await cls._fetch_playwright(url)
+
+    @classmethod
+    async def _fetch_httpx(cls, url: str) -> Optional[str]:
+        """Fetch HTML via httpx. Returns None on failure or 403/429/503."""
         try:
             async with httpx.AsyncClient(
                 timeout=cls.TIMEOUT,
@@ -32,6 +41,9 @@ class ArticleParser:
                 follow_redirects=True,
             ) as client:
                 response = await client.get(url)
+                if response.status_code in (403, 429, 503):
+                    logger.warning(f"Blocked status {response.status_code} for {url}, will try Playwright")
+                    return None
                 response.raise_for_status()
                 return response.text
         except httpx.HTTPStatusError as e:
@@ -42,6 +54,28 @@ class ArticleParser:
             return None
         except Exception as e:
             logger.error(f"Error fetching {url}: {e}")
+            return None
+
+    @classmethod
+    async def _fetch_playwright(cls, url: str) -> Optional[str]:
+        """Fetch HTML via Playwright (fallback for blocked sites like vc.ru)."""
+        try:
+            from playwright.async_api import async_playwright
+
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context(
+                    user_agent=cls.USER_AGENT,
+                    viewport={"width": 1280, "height": 800},
+                )
+                page = await context.new_page()
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(2000)
+                html = await page.content()
+                await browser.close()
+                return html
+        except Exception as e:
+            logger.error(f"Playwright error fetching {url}: {e}")
             return None
     
     @classmethod
