@@ -1,6 +1,7 @@
 """Settings handlers with full FSM for all configurable fields."""
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
 from loguru import logger
@@ -61,14 +62,21 @@ async def _update_settings(user_id: int, **kwargs) -> None:
 
 
 async def _refresh_settings_message(callback: CallbackQuery, user_id: int) -> None:
-    """Edit the current message to show updated settings + keyboard."""
+    """Edit the current message to show updated settings + keyboard.
+    Loads fresh settings after DB commit so keyboard reflects current state.
+    Ignores TelegramBadRequest when message content is unchanged.
+    """
     settings_dict = await get_or_create_settings(user_id)
     settings_obj = await _load_settings_model(user_id)
-    await callback.message.edit_text(
-        text=settings_text(settings_dict),
-        reply_markup=get_settings_keyboard(settings_obj),
-        parse_mode="HTML",
-    )
+    try:
+        await callback.message.edit_text(
+            text=settings_text(settings_dict),
+            reply_markup=get_settings_keyboard(settings_obj),
+            parse_mode="HTML",
+        )
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
 
 
 # ── open settings panel ───────────────────────────────────────────────────────
