@@ -1,5 +1,6 @@
 """Article parser for extracting content from web pages."""
 
+import xml.etree.ElementTree as ET
 from typing import Optional, Dict, Any, List
 from urllib.parse import urljoin, urlparse
 
@@ -180,7 +181,7 @@ class ArticleParser:
 
 async def fetch_links_from_page(url: str) -> List[str]:
     """
-    Fetch all article links from a page.
+    Fetch all article links from a page (HTML or RSS/XML feed).
     
     Args:
         url: URL of the page to parse
@@ -188,42 +189,60 @@ async def fetch_links_from_page(url: str) -> List[str]:
     Returns:
         List of article URLs found on the page
     """
+    # 1. Получаем контент через httpx
     try:
-        html = await ArticleParser.fetch_html(url)
-        if not html:
+        async with httpx.AsyncClient(
+            timeout=30, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}
+        ) as client:
+            response = await client.get(url)
+            content = response.text
+    except Exception as e:
+        logger.error(f"Error fetching {url}: {e}")
+        return []
+
+    # 2. Если RSS/XML — парсим через xml.etree.ElementTree
+    if "<?xml" in content[:100] or "rss" in url.lower() or "feed" in url.lower():
+        try:
+            root = ET.fromstring(content)
+            links = []
+            for item in root.iter("item"):
+                link_el = item.find("link")
+                if link_el is not None and link_el.text:
+                    links.append(link_el.text.strip())
+            logger.info(f"RSS parsed {len(links)} links from {url}")
+            return links
+        except Exception as e:
+            logger.error(f"RSS parse error for {url}: {e}")
             return []
-        
-        soup = BeautifulSoup(html, "html.parser")
+
+    # 3. Иначе — HTML логика
+    try:
+        soup = BeautifulSoup(content, "html.parser")
         links = []
-        
-        # Find all links
+
         for link in soup.find_all("a", href=True):
             href = link["href"]
-            
-            # Convert relative URLs to absolute
+
             if not href.startswith("http"):
                 href = urljoin(url, href)
-            
-            # Filter out non-article links
+
             parsed = urlparse(href)
             if parsed.scheme in ("http", "https") and parsed.netloc:
-                # Skip navigation, social, and other non-content links
                 if any(skip in href.lower() for skip in ["#", "javascript:", "mailto:", "tel:"]):
                     continue
-                
+
                 links.append(href)
-        
-        # Remove duplicates while preserving order
+
         seen = set()
         unique_links = []
         for link in links:
             if link not in seen:
                 seen.add(link)
                 unique_links.append(link)
-        
+
         logger.info(f"Found {len(unique_links)} links on {url}")
         return unique_links
-        
+
     except Exception as e:
         logger.error(f"Error fetching links from {url}: {e}")
         return []
