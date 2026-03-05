@@ -1,5 +1,5 @@
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -22,7 +22,7 @@ async def init_db() -> None:
         # Migration: add content column if missing (SQLite has no ADD COLUMN IF NOT EXISTS)
         try:
             await conn.execute(text("ALTER TABLE articles ADD COLUMN content TEXT"))
-        except OperationalError as e:
+        except (OperationalError, ProgrammingError) as e:
             err = str(e).lower()
             if "duplicate column" not in err and "already exists" not in err:
                 raise
@@ -31,7 +31,7 @@ async def init_db() -> None:
             await conn.execute(text(
                 "ALTER TABLE articles ADD COLUMN is_processed BOOLEAN DEFAULT FALSE"
             ))
-        except OperationalError as e:
+        except (OperationalError, ProgrammingError) as e:
             err = str(e).lower()
             if "duplicate column" not in err and "already exists" not in err:
                 raise
