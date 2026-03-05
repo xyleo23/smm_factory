@@ -249,7 +249,15 @@ async def fetch_rbc_companies_articles(profile_url: str) -> list[dict]:
         seen: set[str] = set()
         for a in soup.find_all("a", href=True):
             href = a["href"]
-            if href.startswith("/news/") and href not in seen:
+            parts = href.split("/")
+            if (
+                href.startswith("/news/")
+                and "?" not in href
+                and "category_filter" not in href
+                and len(parts) >= 4
+                and len(parts[2]) >= 6
+                and href not in seen
+            ):
                 seen.add(href)
                 links.append(base + href)
 
