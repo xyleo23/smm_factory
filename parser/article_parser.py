@@ -1,5 +1,7 @@
 """Article parser for extracting content from web pages."""
 
+import asyncio
+import random
 import xml.etree.ElementTree as ET
 from typing import Optional, Dict, Any, List
 from urllib.parse import urljoin, urlparse
@@ -225,6 +227,54 @@ async def fetch_rss_articles(url: str) -> list[dict]:
     except Exception as e:
         logger.error(f"RSS parse error {url}: {e}")
         return []
+
+
+async def fetch_rbc_companies_articles(profile_url: str) -> list[dict]:
+    """
+    Парсит профиль ИП/компании на RBC Companies.
+    Возвращает список {url, title, content}
+    """
+    base = "https://companies.rbc.ru"
+    async with httpx.AsyncClient(
+        timeout=30,
+        headers={"User-Agent": ArticleParser.USER_AGENT},
+        follow_redirects=True,
+    ) as client:
+        resp = await client.get(profile_url)
+        resp.raise_for_status()
+        html = resp.text
+
+        soup = BeautifulSoup(html, "html.parser")
+        links: list[str] = []
+        seen: set[str] = set()
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if href.startswith("/news/") and href not in seen:
+                seen.add(href)
+                links.append(base + href)
+
+        articles: list[dict] = []
+        for url in links[:20]:
+            try:
+                await asyncio.sleep(random.uniform(0.8, 2.0))
+                r = await client.get(url)
+                r.raise_for_status()
+                s = BeautifulSoup(r.text, "html.parser")
+                title_el = s.find("h1")
+                title = title_el.get_text(strip=True) if title_el else ""
+                content_div = (
+                    s.find("div", class_=lambda c: c and "article" in (c or "").lower())
+                    or s.find("article")
+                    or s.find("div", class_=lambda c: c and "content" in (c or "").lower())
+                )
+                content = content_div.get_text(separator="\n", strip=True) if content_div else ""
+                if title and content:
+                    articles.append({"url": url, "title": title, "content": content})
+            except Exception as e:
+                logger.error(f"RBC Companies article fetch error {url}: {e}")
+
+        logger.info(f"RBC Companies: {len(articles)} articles from {profile_url}")
+        return articles
 
 
 async def fetch_links_from_page(url: str) -> List[str]:

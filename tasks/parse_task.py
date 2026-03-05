@@ -13,7 +13,13 @@ from sqlalchemy.orm import sessionmaker
 from tasks.celery_app import celery_app
 from models import Source, UserSettings, Article, Post, ParsingHistory, PostStatus
 from core.config import settings
-from parser import ArticleParser, SerpParser, fetch_links_from_page, fetch_rss_articles
+from parser import (
+    ArticleParser,
+    SerpParser,
+    fetch_links_from_page,
+    fetch_rbc_companies_articles,
+    fetch_rss_articles,
+)
 from ai import ContentAnalyzer, SEOWriter, SEOChecker, SelfReviewer, NanaBananaGenerator
 from publisher import UTMInjector
 from tasks.publish_task import publish_post
@@ -170,6 +176,7 @@ async def _parse_and_generate_async() -> dict:
         all_urls: Set[str] = set()
         url_to_source: Dict[str, int] = {}
         rss_items: List[tuple] = []  # (source_id, article_dict)
+        rbc_items: List[tuple] = []  # (source_id, article_dict)
 
         for source in sources:
             try:
@@ -184,6 +191,14 @@ async def _parse_and_generate_async() -> dict:
                             all_urls.add(art_url)
                             url_to_source[art_url] = source.id
                             rss_items.append((source.id, article))
+                elif "companies.rbc.ru/persons" in url_lower or "companies.rbc.ru/id" in url_lower:
+                    articles = await fetch_rbc_companies_articles(source.url)
+                    for article in articles:
+                        art_url = article.get("url", "").strip()
+                        if art_url:
+                            all_urls.add(art_url)
+                            url_to_source[art_url] = source.id
+                            rbc_items.append((source.id, article))
                 else:
                     links = await fetch_links_from_page(source.url)
                     for link in links:
@@ -270,6 +285,36 @@ async def _parse_and_generate_async() -> dict:
                         raise
             except Exception as e:
                 logger.error(f"RSS save error for {art_url}: {e}")
+                stats["errors"] += 1
+
+        # Step 5c: Save RBC Companies articles (content already fetched)
+        for source_id, article in rbc_items:
+            art_url = article.get("url", "").strip()
+            if art_url not in new_urls:
+                continue
+            try:
+                async with local_session_factory() as db:
+                    try:
+                        result = await db.execute(
+                            select(Article.id).where(Article.url == art_url)
+                        )
+                        if result.scalar_one_or_none():
+                            continue
+                        art = Article(
+                            source_id=source_id,
+                            url=art_url,
+                            title=article.get("title", "")[:512],
+                            content=article.get("content", "") or "",
+                            is_processed=False,
+                        )
+                        db.add(art)
+                        await db.commit()
+                        logger.info(f"RBC Companies: saved article {art_url[:60]}...")
+                    except Exception:
+                        await db.rollback()
+                        raise
+            except Exception as e:
+                logger.error(f"RBC Companies save error for {art_url}: {e}")
                 stats["errors"] += 1
 
         # Step 6: Process each new URL
