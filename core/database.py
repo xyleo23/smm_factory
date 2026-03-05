@@ -23,6 +23,7 @@ async def init_db() -> None:
     migrations = [
         "ALTER TABLE articles ADD COLUMN content TEXT",
         "ALTER TABLE articles ADD COLUMN is_processed BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE articles ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW()",
     ]
     for sql in migrations:
         try:

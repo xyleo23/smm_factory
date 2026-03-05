@@ -231,7 +231,8 @@ async def fetch_rss_articles(url: str) -> list[dict]:
 
 async def fetch_rbc_companies_articles(profile_url: str) -> list[dict]:
     """
-    Парсит профиль ИП/компании на RBC Companies.
+    Парсит страницу автора (persons/...) на RBC Companies.
+    Собирает статьи ТОЛЬКО со страницы автора (source.url), не из общей ленты.
     Возвращает список {url, title, content}
     """
     base = "https://companies.rbc.ru"
@@ -240,27 +241,39 @@ async def fetch_rbc_companies_articles(profile_url: str) -> list[dict]:
         headers={"User-Agent": ArticleParser.USER_AGENT},
         follow_redirects=True,
     ) as client:
+        # 1. GET страницы автора (один запрос)
         resp = await client.get(profile_url)
         resp.raise_for_status()
         html = resp.text
 
+        # 2. Найти все <a href="/news/..."> или href="https://companies.rbc.ru/news/..." на странице
         soup = BeautifulSoup(html, "html.parser")
         links: list[str] = []
         seen: set[str] = set()
         for a in soup.find_all("a", href=True):
-            href = a["href"]
-            parts = href.split("/")
-            if (
-                href.startswith("/news/")
-                and "?" not in href
-                and "category_filter" not in href
-                and len(parts) >= 4
-                and len(parts[2]) >= 6
-                and href not in seen
-            ):
-                seen.add(href)
-                links.append(base + href)
+            href = a["href"].strip()
+            # Нормализуем: относительные /news/... или абсолютные https://companies.rbc.ru/news/...
+            if href.startswith(base + "/news/"):
+                path = href[len(base) :]
+            elif href.startswith("/news/"):
+                path = href
+            else:
+                continue
+            # 3. Фильтр: без ?, без category_filter, slug >= 6 символов
+            if "?" in path or "category_filter" in path:
+                continue
+            parts = [p for p in path.split("/") if p]
+            if len(parts) < 2:
+                continue
+            slug = parts[1] if len(parts) > 1 else ""
+            if len(slug) < 6:
+                continue
+            full_url = base + path if path.startswith("/") else base + "/" + path
+            if full_url not in seen:
+                seen.add(full_url)
+                links.append(full_url)
 
+        # 4. До 20 уникальных URL статей
         articles: list[dict] = []
         for url in links[:20]:
             try:
