@@ -5,7 +5,6 @@ from ai.seo_checker import SEOChecker
 from ai.self_reviewer import SelfReviewer
 from ai.writer import SEOWriter
 
-# NanaBananaGenerator — из image_gen (instance-based)
 from ai.image_gen import NanoBananaGenerator
 
 __all__ = [
@@ -13,5 +12,5 @@ __all__ = [
     "SEOChecker",
     "SEOWriter",
     "SelfReviewer",
-    "NanaBananaGenerator",
+    "NanoBananaGenerator",
 ]

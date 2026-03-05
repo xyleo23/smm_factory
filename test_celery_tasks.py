@@ -27,7 +27,7 @@ def test_imports():
         from parser import ArticleParser, SerpParser, fetch_links_from_page, fetch_rss_articles
         logger.success("✓ parser modules imported")
         
-        from ai import ContentAnalyzer, SEOWriter, SEOChecker, SelfReviewer, NanaBananaGenerator
+        from ai import ContentAnalyzer, SEOWriter, SEOChecker, SelfReviewer, NanoBananaGenerator
         logger.success("✓ ai modules imported")
         
         from publisher import TelegramPublisher, VCPublisher, RBCPublisher, UTMInjector

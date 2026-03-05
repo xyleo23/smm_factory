@@ -22,7 +22,7 @@ from parser import (
     fetch_rbc_companies_articles,
     fetch_rss_articles,
 )
-from ai import ContentAnalyzer, SEOWriter, SEOChecker, SelfReviewer, NanaBananaGenerator
+from ai import ContentAnalyzer, SEOWriter, SEOChecker, SelfReviewer, NanoBananaGenerator
 from publisher import UTMInjector
 from tasks.publish_task import publish_post
 
@@ -158,7 +158,7 @@ async def _generate_post_for_article(
 
         text = utm_injector.inject(text, internal_links, user_settings.utm_template)
 
-        image_url = await NanaBananaGenerator.generate(
+        image_url = await NanoBananaGenerator.generate(
             title=article_data.get("title", ""),
             topic=article_data.get("title", ""),
         )
