@@ -1,5 +1,4 @@
 from sqlalchemy import text
-from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase
 
@@ -19,19 +18,17 @@ async_session = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_c
 async def init_db() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-        # Migration: add content column if missing (SQLite has no ADD COLUMN IF NOT EXISTS)
+
+    # Каждый ALTER TABLE — в своей транзакции (PostgreSQL иначе падает с InFailedSQLTransactionError)
+    migrations = [
+        "ALTER TABLE articles ADD COLUMN content TEXT",
+        "ALTER TABLE articles ADD COLUMN is_processed BOOLEAN DEFAULT FALSE",
+    ]
+    for sql in migrations:
         try:
-            await conn.execute(text("ALTER TABLE articles ADD COLUMN content TEXT"))
-        except (OperationalError, ProgrammingError) as e:
+            async with engine.begin() as conn:
+                await conn.execute(text(sql))
+        except Exception as e:
             err = str(e).lower()
-            if "duplicate column" not in err and "already exists" not in err:
-                raise
-        # Migration: add is_processed column if missing
-        try:
-            await conn.execute(text(
-                "ALTER TABLE articles ADD COLUMN is_processed BOOLEAN DEFAULT FALSE"
-            ))
-        except (OperationalError, ProgrammingError) as e:
-            err = str(e).lower()
-            if "duplicate column" not in err and "already exists" not in err:
+            if "already exists" not in err and "duplicate column" not in err:
                 raise
