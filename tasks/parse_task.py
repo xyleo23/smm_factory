@@ -421,7 +421,6 @@ async def _parse_and_generate_async() -> dict:
                     try:
                         post = Post(
                             article_id=article_id,
-                            title=article_data.get("title"),
                             text=text,
                             image_url=image_url,
                             status=PostStatus.PENDING.value,
