@@ -20,8 +20,8 @@ async def init_db() -> None:
         await conn.run_sync(Base.metadata.create_all)
 
     # Каждый ALTER TABLE — в своей транзакции (PostgreSQL иначе падает с InFailedSQLTransactionError)
+    # content уже есть в БД, не добавляем
     migrations = [
-        "ALTER TABLE articles ADD COLUMN content TEXT",
         "ALTER TABLE articles ADD COLUMN is_processed BOOLEAN DEFAULT FALSE",
         "ALTER TABLE articles ADD COLUMN created_at TIMESTAMPTZ DEFAULT NOW()",
     ]

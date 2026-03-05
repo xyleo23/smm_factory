@@ -274,7 +274,7 @@ async def _parse_and_generate_async() -> dict:
                             source_id=source_id,
                             url=art_url,
                             title=article.get("title", "")[:512],
-                            content=article.get("content", "") or "",
+                            text=article.get("content", "") or "",
                             is_processed=False,
                         )
                         db.add(art)
@@ -304,7 +304,7 @@ async def _parse_and_generate_async() -> dict:
                             source_id=source_id,
                             url=art_url,
                             title=article.get("title", "")[:512],
-                            content=article.get("content", "") or "",
+                            text=article.get("content", "") or "",
                             is_processed=False,
                         )
                         db.add(art)
@@ -337,7 +337,7 @@ async def _parse_and_generate_async() -> dict:
                             continue
                         article_data = {
                             "title": existing_article.title,
-                            "content": existing_article.content,
+                            "content": existing_article.text,
                         }
                         article_id = existing_article.id
 
@@ -367,7 +367,7 @@ async def _parse_and_generate_async() -> dict:
                                 source_id=source_id,
                                 url=url,
                                 title=article_data.get("title"),
-                                content=article_data.get("content"),
+                                text=article_data.get("content") or "",
                                 is_processed=False,
                             )
                             db.add(article)
@@ -436,7 +436,6 @@ async def _parse_and_generate_async() -> dict:
                         article = ar_result.scalar_one_or_none()
                         if article:
                             article.is_processed = True
-                            article.processed_at = datetime.utcnow()
                             await db.commit()
                     except Exception:
                         await db.rollback()
