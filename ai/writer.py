@@ -1,3 +1,5 @@
+"""Post writer for Telegram channels — короткие посты на русском."""
+
 import asyncio
 from typing import Any
 
@@ -7,61 +9,86 @@ from openai import AsyncOpenAI
 from core.config import settings
 
 
+def _api_key() -> str | None:
+    """Поддержка snake_case и UPPER_CASE."""
+    return getattr(settings, "openrouter_api_key", None) or getattr(
+        settings, "OPENROUTER_API_KEY", None
+    )
+
+
 class SEOWriter:
-    """Генерирует SEO-оптимизированные статьи на основе анализа контента."""
+    """Генерирует короткие посты для Telegram на основе анализа контента."""
 
     def __init__(self) -> None:
+        api_key = _api_key()
         self.client = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
-            api_key=settings.OPENROUTER_API_KEY,
+            api_key=api_key or "",
         )
 
+    @classmethod
     async def write(
-        self,
+        cls,
+        *,
         analysis: str,
         tone: str,
         keywords: list[str] | None = None,
-        llm_model: str = "anthropic/claude-3-5-sonnet",
+        llm: str | None = None,
+        llm_model: str | None = None,
+        source_url: str | None = None,
     ) -> str:
         """
-        Пишет полноценную SEO-статью в формате Markdown.
+        Пишет короткий пост для Telegram (500–800 символов, русский язык).
 
         Args:
-            analysis: Результат анализа контента конкурента
-            tone: Тон статьи (например, "профессиональный", "дружелюбный", "экспертный")
-            keywords: Список SEO-ключевых слов для органичного использования
-            llm_model: Модель LLM для генерации (по умолчанию Claude 3.5 Sonnet)
+            analysis: Результат анализа контента от ContentAnalyzer
+            tone: Тон (профессиональный, живой, экспертный и т.д.)
+            keywords: SEO-ключи для органичного использования
+            llm: Модель LLM (alias для llm_model)
+            llm_model: Модель для генерации
+            source_url: Ссылка на оригинал — добавляется в конец поста
 
         Returns:
-            Готовая SEO-статья в формате Markdown
-
-        Raises:
-            RuntimeError: Если не удалось сгенерировать статью после 3 попыток
+            Готовый текст поста для Telegram
         """
+        model = llm or llm_model or "anthropic/claude-3-5-sonnet"
+        instance = cls()
+        return await instance._write_impl(analysis, tone, keywords or [], model, source_url)
+
+    async def _write_impl(
+        self,
+        analysis: str,
+        tone: str,
+        keywords: list[str],
+        llm_model: str,
+        source_url: str | None,
+    ) -> str:
         keywords_str = ", ".join(keywords) if keywords else "не заданы"
 
         system_prompt = (
-            "Ты профессиональный SEO-копирайтер и SMM-специалист. "
-            "Напиши полноценную SEO-статью в формате Markdown. "
-            "Обязательная структура: H1-заголовок, вступление (2-3 предложения), "
-            "3-5 разделов с H2/H3, списки и выделения, заключение с CTA. "
-            f"Tone of Voice: {tone}. Длина: не менее 2000 символов. "
-            f"Ключевые слова (использовать органично): {keywords_str}."
+            "Ты SMM-копирайтер. Пиши короткие посты для Telegram-канала. "
+            "ПРАВИЛА:\n"
+            "- Язык: ТОЛЬКО русский\n"
+            "- Длина: 500–800 символов\n"
+            "- Формат: 3–5 предложений, один абзац или короткие абзацы\n"
+            "- БЕЗ markdown-заголовков (# ## ###), БЕЗ списков типа 'Key Insights', 'Overview'\n"
+            "- Тон: профессиональный, живой, подходящий для канала о бизнесе/финансах\n"
+            "- Не используй английские шаблоны вроде 'Comprehensive Guide', 'Key Insights'\n"
+            f"- Tone of Voice: {tone}\n"
+            f"- Ключевые слова (органично): {keywords_str}"
         )
 
         user_prompt = (
-            "Ниже представлен анализ статьи конкурента. "
-            "Используй его как основу для создания более сильной статьи:\n\n"
+            "По анализу статьи конкурента напиши краткий пост для Telegram.\n\n"
             f"{analysis}"
         )
 
         for attempt in range(3):
             try:
                 logger.info(
-                    "Writing SEO article: model={} tone='{}' keywords_count={} attempt={}/3",
+                    "Writing post: model={} tone='{}' attempt={}/3",
                     llm_model,
                     tone,
-                    len(keywords) if keywords else 0,
                     attempt + 1,
                 )
 
@@ -71,53 +98,39 @@ class SEOWriter:
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    temperature=0.8,
+                    temperature=0.7,
                 )
 
-                article = self._extract_text(response)
-                logger.success(
-                    "SEO article generated: length={} chars",
-                    len(article),
-                )
-                return article
+                text = self._extract_text(response)
+                if source_url and source_url.strip():
+                    text = f"{text.rstrip()}\n\n📎 Оригинал: {source_url}"
+                logger.success("Post generated: length={} chars", len(text))
+                return text
 
             except Exception as exc:
                 if attempt == 2:
-                    logger.error(
-                        "Failed to write SEO article after 3 attempts: model={} error={}",
-                        llm_model,
-                        exc,
-                    )
-                    raise RuntimeError(f"Article writing failed: {exc}") from exc
-
+                    logger.error("Failed to write post after 3 attempts: {}", exc)
+                    raise RuntimeError(f"Post writing failed: {exc}") from exc
                 delay = 2**attempt
-                logger.warning(
-                    "Article writing attempt {}/3 failed: {}. Retry in {} sec.",
-                    attempt + 1,
-                    exc,
-                    delay,
-                )
+                logger.warning("Write attempt {}/3 failed, retry in {}s", attempt + 1, delay)
                 await asyncio.sleep(delay)
 
-        raise RuntimeError("Failed to write SEO article after 3 attempts")
+        raise RuntimeError("Failed to write post after 3 attempts")
 
     @staticmethod
     def _extract_text(response: Any) -> str:
-        """Извлекает текст из ответа OpenAI API."""
         message = response.choices[0].message
         content = getattr(message, "content", "")
-
         if isinstance(content, str):
             return content.strip()
         if isinstance(content, list):
-            text_chunks: list[str] = []
+            chunks = []
             for chunk in content:
                 if isinstance(chunk, dict) and chunk.get("type") == "text":
-                    text_chunks.append(chunk.get("text", ""))
+                    chunks.append(chunk.get("text", ""))
                 else:
-                    text_value = getattr(chunk, "text", None)
-                    if isinstance(text_value, str):
-                        text_chunks.append(text_value)
-            return "\n".join(part for part in text_chunks if part).strip()
-
+                    t = getattr(chunk, "text", None)
+                    if isinstance(t, str):
+                        chunks.append(t)
+            return "\n".join(c for c in chunks if c).strip()
         return str(content).strip()

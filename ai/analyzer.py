@@ -7,17 +7,29 @@ from openai import AsyncOpenAI
 from core.config import settings
 
 
+def _analyzer_api_key() -> str | None:
+    return getattr(settings, "openrouter_api_key", None) or getattr(
+        settings, "OPENROUTER_API_KEY", None
+    )
+
+
 class ContentAnalyzer:
     """Анализирует контент конкурентов и выявляет ключевые тезисы для улучшения."""
 
     def __init__(self) -> None:
         self.client = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
-            api_key=settings.OPENROUTER_API_KEY,
+            api_key=_analyzer_api_key() or "",
         )
         self.model = "openai/gpt-4o-mini"
 
-    async def analyze(self, title: str, content: str) -> str:
+    @classmethod
+    async def analyze(cls, title: str, content: str) -> str:
+        """Классовый метод для вызова из parse_task."""
+        instance = cls()
+        return await instance._analyze_impl(title, content)
+
+    async def _analyze_impl(self, title: str, content: str) -> str:
         """
         Анализирует статью конкурента и возвращает структурированный анализ.
 

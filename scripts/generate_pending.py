@@ -81,6 +81,7 @@ async def _run() -> None:
             article_data = {
                 "title": article.title or "",
                 "content": article.text,
+                "url": article.url,
             }
 
             post_id = await _generate_post_for_article(

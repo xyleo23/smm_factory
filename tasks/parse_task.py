@@ -148,9 +148,10 @@ async def _generate_post_for_article(
             tone=user_settings.tone,
             keywords=keywords,
             llm=user_settings.selected_llm,
+            source_url=article_data.get("url"),
         )
 
-        seo_result = SEOChecker.check(text, keywords)
+        seo_result = await SEOChecker.check(text, keywords)
         if not seo_result["passed"]:
             logger.warning(f"SEO check failed for article {article_id}, reviewing...")
             text = await SelfReviewer.review(text, seo_result["issues"])
@@ -446,6 +447,7 @@ async def _parse_and_generate_async() -> dict:
                             article_data = {
                                 "title": existing_article.title,
                                 "content": existing_article.text,
+                                "url": existing_article.url,
                             }
                             article_id = existing_article.id
 
@@ -467,6 +469,7 @@ async def _parse_and_generate_async() -> dict:
                             )
                             stats["errors"] += 1
                             continue
+                        article_data["url"] = url
 
                         if not source_id:
                             logger.warning(f"No source_id for {url}, skipping")
@@ -539,6 +542,7 @@ async def _parse_and_generate_async() -> dict:
                     article_data = {
                         "title": article.title,
                         "content": article.text,
+                        "url": article.url,
                     }
                     post_id = await _generate_post_for_article(
                         article_id=article.id,

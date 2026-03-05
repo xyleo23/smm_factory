@@ -8,17 +8,29 @@ from openai import AsyncOpenAI
 from core.config import settings
 
 
+def _seo_api_key() -> str | None:
+    return getattr(settings, "openrouter_api_key", None) or getattr(
+        settings, "OPENROUTER_API_KEY", None
+    )
+
+
 class SEOChecker:
-    """Проверяет SEO-качество сгенерированных статей."""
+    """Проверяет SEO-качество сгенерированных статей и коротких постов."""
 
     def __init__(self) -> None:
         self.client = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
-            api_key=settings.OPENROUTER_API_KEY,
+            api_key=_seo_api_key() or "",
         )
         self.model = "openai/gpt-4o-mini"
 
-    async def check(
+    @classmethod
+    async def check(cls, text: str, keywords: list[str] | None = None) -> dict:
+        """Проверяет текст. Для коротких постов (<1200 символов) — мягкие критерии."""
+        instance = cls()
+        return await instance._check_impl(text, keywords)
+
+    async def _check_impl(
         self,
         text: str,
         keywords: list[str] | None = None,
@@ -44,6 +56,7 @@ class SEOChecker:
         has_h1 = bool(re.search(r"^#\s+.+", text, re.MULTILINE))
         has_h2 = bool(re.search(r"^##\s+.+", text, re.MULTILINE))
         length = len(text)
+        is_short_post = length < 1200
 
         # Проверка плотности ключевых слов
         keyword_density = 0.0
@@ -53,27 +66,33 @@ class SEOChecker:
             words_count = len(text.split())
             keyword_density = (keyword_count / words_count * 100) if words_count > 0 else 0.0
 
-        # Сбор проблем
+        # Сбор проблем (для коротких постов — другие критерии)
         issues: list[str] = []
-        if not has_h1:
-            issues.append("Отсутствует H1 заголовок")
-        if not has_h2:
-            issues.append("Отсутствуют H2 заголовки")
-        if length < 2000:
-            issues.append(f"Статья слишком короткая: {length} символов (минимум 2000)")
-        if keywords and keyword_density < 0.5:
-            issues.append(f"Низкая плотность ключевых слов: {keyword_density:.2f}%")
+        if is_short_post:
+            if length < 200:
+                issues.append(f"Пост слишком короткий: {length} символов")
+            if keywords and keyword_density < 0.3:
+                issues.append(f"Низкая плотность ключевых слов: {keyword_density:.2f}%")
+        else:
+            if not has_h1:
+                issues.append("Отсутствует H1 заголовок")
+            if not has_h2:
+                issues.append("Отсутствуют H2 заголовки")
+            if length < 2000:
+                issues.append(f"Статья слишком короткая: {length} символов (минимум 2000)")
+            if keywords and keyword_density < 0.5:
+                issues.append(f"Низкая плотность ключевых слов: {keyword_density:.2f}%")
 
-        # Запрашиваем оценку у LLM
-        score = await self._get_llm_score(text, keywords)
+        # Запрашиваем оценку у LLM (для коротких постов — упрощённая оценка)
+        score = await self._get_llm_score(text, keywords, is_short_post)
 
-        # Добавляем проблемы из базовых проверок
-        if not has_h1:
-            score = max(0, score - 20)
-        if not has_h2:
-            score = max(0, score - 15)
-        if length < 2000:
-            score = max(0, score - 10)
+        if not is_short_post:
+            if not has_h1:
+                score = max(0, score - 20)
+            if not has_h2:
+                score = max(0, score - 15)
+            if length < 2000:
+                score = max(0, score - 10)
 
         passed = score >= 70
 
@@ -103,17 +122,28 @@ class SEOChecker:
 
         return result
 
-    async def _get_llm_score(self, text: str, keywords: list[str] | None) -> int:
+    async def _get_llm_score(
+        self, text: str, keywords: list[str] | None, is_short_post: bool = False
+    ) -> int:
         """Получает SEO-оценку от LLM (0-100)."""
         keywords_str = ", ".join(keywords) if keywords else "не заданы"
 
-        prompt = (
-            "Оцени SEO-качество следующей статьи по шкале от 0 до 100. "
-            "Учитывай структуру, читабельность, информативность, CTA. "
-            f"Ключевые слова для проверки: {keywords_str}.\n\n"
-            "Верни ТОЛЬКО число от 0 до 100, без дополнительного текста.\n\n"
-            f"Текст статьи:\n{text[:3000]}"  # Ограничиваем длину для экономии токенов
-        )
+        if is_short_post:
+            prompt = (
+                "Оцени качество короткого поста для Telegram по шкале 0–100. "
+                "Учитывай читабельность, информативность, русский язык. "
+                f"Ключевые слова: {keywords_str}.\n\n"
+                "Верни ТОЛЬКО число 0–100.\n\n"
+                f"Текст:\n{text[:1500]}"
+            )
+        else:
+            prompt = (
+                "Оцени SEO-качество следующей статьи по шкале от 0 до 100. "
+                "Учитывай структуру, читабельность, информативность, CTA. "
+                f"Ключевые слова для проверки: {keywords_str}.\n\n"
+                "Верни ТОЛЬКО число от 0 до 100, без дополнительного текста.\n\n"
+                f"Текст статьи:\n{text[:3000]}"
+            )
 
         for attempt in range(3):
             try:

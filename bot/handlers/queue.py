@@ -81,10 +81,10 @@ async def cb_queue(callback: CallbackQuery, bot: Bot) -> None:
                     parse_mode="HTML",
                 )
         except Exception as exc:
-            logger.error(f"Failed to send post {post['id']} preview: {exc}")
+            logger.warning(f"Could not send photo for post {post['id']}, sending text only: {exc}")
             await bot.send_message(
                 chat_id=chat_id,
-                text=f"⚠️ Не удалось загрузить превью поста #{post['id']}\n\n{caption}",
+                text=f"📝 Пост #{post['id']}\n\n{caption}",
                 reply_markup=get_approval_keyboard(post["id"]),
                 parse_mode="HTML",
             )

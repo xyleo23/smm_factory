@@ -13,9 +13,18 @@ class NanoBananaGenerator:
     API_URL = "https://api.nanobanana.com/v2/generate"
 
     def __init__(self) -> None:
-        self.api_key = settings.NANO_BANANA_API_KEY
+        self.api_key = (
+            getattr(settings, "nano_banana_api_key", None)
+            or getattr(settings, "NANO_BANANA_API_KEY", None)
+        )
 
-    async def generate(self, title: str, topic: str) -> str | None:
+    @classmethod
+    async def generate(cls, title: str, topic: str = "") -> str | None:
+        """Классовый метод для вызова из parse_task."""
+        g = cls()
+        return await g._generate_impl(title, topic or title)
+
+    async def _generate_impl(self, title: str, topic: str) -> str | None:
         """
         Генерирует SMM-баннер для статьи.
 

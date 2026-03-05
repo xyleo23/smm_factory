@@ -2,6 +2,7 @@
 
 import asyncio
 import random
+import re
 import xml.etree.ElementTree as ET
 from typing import Optional, Dict, Any, List
 from urllib.parse import urljoin, urlparse
@@ -9,6 +10,23 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from bs4 import BeautifulSoup
 from loguru import logger
+
+# Строки навигации/мусора, которые нужно удалить из извлечённого текста
+JUNK_PHRASES: list[str] = [
+    "Войти",
+    "Создать аккаунт",
+    "Поделиться новостью",
+    "Поделиться",
+    "Подписаться",
+    "Вход в личный кабинет",
+    "Регистрация",
+    "Читать далее",
+    "Подробнее",
+    "Все новости",
+    "Политика конфиденциальности",
+    "Условия использования",
+    "О проекте",
+]
 
 
 class ArticleParser:
@@ -82,40 +100,51 @@ class ArticleParser:
             return None
     
     @classmethod
+    def _strip_junk(cls, text: str) -> str:
+        """Удаляет фразы навигации и мусор из текста."""
+        if not text:
+            return ""
+        result = text
+        for phrase in JUNK_PHRASES:
+            # Удаляем фразу и окружающие разделители (слэш, пробелы)
+            result = re.sub(
+                rf"\s*{re.escape(phrase)}\s*(/\s*)?",
+                " ",
+                result,
+                flags=re.IGNORECASE,
+            )
+        # Схлопываем множественные пробелы и переносы
+        result = re.sub(r"\n{3,}", "\n\n", result)
+        result = re.sub(r" +", " ", result)
+        return result.strip()
+
+    @classmethod
     def parse_article(cls, html: str, base_url: str = "") -> Optional[Dict[str, Any]]:
         """
         Parse article content from HTML.
-        
-        Args:
-            html: HTML content
-            base_url: Base URL for resolving relative links
-            
-        Returns:
-            Dictionary with title, content, and metadata or None if parsing failed
+        Извлекает только текст статьи, без навигации и мусора.
         """
         try:
             soup = BeautifulSoup(html, "html.parser")
-            
-            # Remove unwanted elements
+
             for tag in soup(["script", "style", "nav", "footer", "aside", "iframe"]):
                 tag.decompose()
-            
-            # Try to find article title
+
             title = cls._extract_title(soup)
-            
-            # Try to find article content
             content = cls._extract_content(soup)
-            
+            if content:
+                content = cls._strip_junk(content)
+
             if not title and not content:
                 logger.warning("Could not extract title or content from HTML")
                 return None
-            
+
             return {
-                "title": title,
-                "content": content,
-                "word_count": len(content.split()) if content else 0,
+                "title": title or "",
+                "content": content or "",
+                "word_count": len((content or "").split()),
             }
-            
+
         except Exception as e:
             logger.error(f"Error parsing article HTML: {e}")
             return None
@@ -151,33 +180,54 @@ class ArticleParser:
     
     @classmethod
     def _extract_content(cls, soup: BeautifulSoup) -> Optional[str]:
-        """Extract article content from HTML."""
-        selectors = [
-            "article",
+        """
+        Извлекает только основной текст статьи.
+        Приоритет: articleBody, article-content, post-content; исключаем навигацию.
+        """
+        # Приоритетные селекторы контента (без nav/header)
+        content_selectors = [
+            '[itemprop="articleBody"]',
+            ".article__body",
             ".article-content",
             ".post-content",
             ".entry-content",
-            '[itemprop="articleBody"]',
-            "main",
+            "article .text",
+            "article .content",
         ]
-        
-        for selector in selectors:
+        for selector in content_selectors:
             tag = soup.select_one(selector)
             if tag:
-                # Get all paragraphs
                 paragraphs = tag.find_all("p")
                 if paragraphs:
-                    content = "\n\n".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+                    content = "\n\n".join(
+                        p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)
+                    )
                     if len(content) > 100:
                         return content
-        
-        # Fallback: get all paragraphs from body
+
+        # article / main — только если внутри много параграфов
+        for selector in ["article", "main"]:
+            tag = soup.select_one(selector)
+            if not tag:
+                continue
+            for skip in tag.find_all(["nav", "header", "aside", "footer"]):
+                skip.decompose()
+            paragraphs = tag.find_all("p")
+            if paragraphs:
+                content = "\n\n".join(
+                    p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)
+                )
+                if len(content) > 100:
+                    return content
+
         paragraphs = soup.find_all("p")
         if paragraphs:
-            content = "\n\n".join(p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True))
+            content = "\n\n".join(
+                p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)
+            )
             if len(content) > 100:
                 return content
-        
+
         return None
 
 
@@ -273,7 +323,7 @@ async def fetch_rbc_companies_articles(profile_url: str) -> list[dict]:
                 seen.add(full_url)
                 links.append(full_url)
 
-        # 4. До 20 уникальных URL статей
+        # 4. До 20 уникальных URL статей — парсим с RBC-специфичными селекторами
         articles: list[dict] = []
         for url in links[:20]:
             try:
@@ -281,15 +331,49 @@ async def fetch_rbc_companies_articles(profile_url: str) -> list[dict]:
                 r = await client.get(url)
                 r.raise_for_status()
                 s = BeautifulSoup(r.text, "html.parser")
+
+                for tag in s(["script", "style", "nav", "header", "footer", "aside"]):
+                    tag.decompose()
+
                 title_el = s.find("h1")
                 title = title_el.get_text(strip=True) if title_el else ""
+
+                # RBC Companies: селекторы именно для тела статьи (без меню/навигации)
                 content_div = (
-                    s.find("div", class_=lambda c: c and "article" in (c or "").lower())
+                    s.select_one('[itemprop="articleBody"]')
+                    or s.select_one(".article__body")
+                    or s.select_one(".l-article__body")
+                    or s.select_one(".news__text")
+                    or s.select_one(".article__text")
                     or s.find("article")
-                    or s.find("div", class_=lambda c: c and "content" in (c or "").lower())
                 )
-                content = content_div.get_text(separator="\n", strip=True) if content_div else ""
-                if title and content:
+                if not content_div:
+                    content_div = s.find(
+                        "div",
+                        class_=lambda c: c
+                        and any(
+                            x in (c or "").lower()
+                            for x in ("article__body", "article-body", "news__body")
+                        ),
+                    )
+                if not content_div:
+                    content_div = s.find(
+                        "div",
+                        class_=lambda c: c and "text" in (c or "").lower() and "article" in (c or "").lower(),
+                    )
+
+                content = ""
+                if content_div:
+                    paragraphs = content_div.find_all("p")
+                    if paragraphs:
+                        content = "\n\n".join(
+                            p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)
+                        )
+                    else:
+                        content = content_div.get_text(separator="\n", strip=True)
+                    content = ArticleParser._strip_junk(content)
+
+                if title and content and len(content) > 50:
                     articles.append({"url": url, "title": title, "content": content})
             except Exception as e:
                 logger.error(f"RBC Companies article fetch error {url}: {e}")

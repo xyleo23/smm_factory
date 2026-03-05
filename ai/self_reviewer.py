@@ -7,17 +7,28 @@ from openai import AsyncOpenAI
 from core.config import settings
 
 
+def _reviewer_api_key() -> str | None:
+    return getattr(settings, "openrouter_api_key", None) or getattr(
+        settings, "OPENROUTER_API_KEY", None
+    )
+
+
 class SelfReviewer:
     """Самостоятельно проверяет и улучшает сгенерированные тексты."""
 
     def __init__(self) -> None:
         self.client = AsyncOpenAI(
             base_url="https://openrouter.ai/api/v1",
-            api_key=settings.OPENROUTER_API_KEY,
+            api_key=_reviewer_api_key() or "",
         )
         self.model = "anthropic/claude-3-5-sonnet"
 
-    async def review(self, text: str, issues: list[str]) -> str:
+    @classmethod
+    async def review(cls, text: str, issues: list[str]) -> str:
+        instance = cls()
+        return await instance._review_impl(text, issues)
+
+    async def _review_impl(self, text: str, issues: list[str]) -> str:
         """
         Проверяет текст и устраняет выявленные проблемы.
 
