@@ -26,3 +26,12 @@ async def init_db() -> None:
             err = str(e).lower()
             if "duplicate column" not in err and "already exists" not in err:
                 raise
+        # Migration: add is_processed column if missing
+        try:
+            await conn.execute(text(
+                "ALTER TABLE articles ADD COLUMN is_processed BOOLEAN DEFAULT FALSE"
+            ))
+        except OperationalError as e:
+            err = str(e).lower()
+            if "duplicate column" not in err and "already exists" not in err:
+                raise
