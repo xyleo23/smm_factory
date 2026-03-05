@@ -179,6 +179,54 @@ class ArticleParser:
         return None
 
 
+async def fetch_rss_articles(url: str) -> list[dict]:
+    """
+    Fetch articles directly from RSS feed.
+    Returns list of dicts: {url, title, content, pub_date}
+    """
+    try:
+        async with httpx.AsyncClient(
+            timeout=30,
+            follow_redirects=True,
+            headers={"User-Agent": ArticleParser.USER_AGENT},
+        ) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            content = response.text
+    except Exception as e:
+        logger.error(f"RSS fetch error {url}: {e}")
+        return []
+
+    try:
+        root = ET.fromstring(content)
+        articles = []
+        for item in root.iter("item"):
+            full_text = None
+            for child in item:
+                if child.tag.split("}")[-1] == "full-text":
+                    full_text = child.text
+                    break
+
+            link = item.findtext("link") or ""
+            title = item.findtext("title") or ""
+            description = item.findtext("description") or ""
+            pub_date = item.findtext("pubDate") or ""
+
+            content_text = full_text or description
+            if link and content_text:
+                articles.append({
+                    "url": link.strip(),
+                    "title": title.strip(),
+                    "content": content_text.strip(),
+                    "pub_date": pub_date.strip(),
+                })
+        logger.info(f"RSS parsed {len(articles)} articles from {url}")
+        return articles
+    except Exception as e:
+        logger.error(f"RSS parse error {url}: {e}")
+        return []
+
+
 async def fetch_links_from_page(url: str) -> List[str]:
     """
     Fetch all article links from a page (HTML or RSS/XML feed).

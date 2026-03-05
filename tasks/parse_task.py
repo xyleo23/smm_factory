@@ -2,7 +2,7 @@
 
 import asyncio
 from datetime import datetime
-from typing import List, Set
+from typing import Dict, List, Set
 
 from celery import Task
 from loguru import logger
@@ -13,7 +13,7 @@ from sqlalchemy.orm import sessionmaker
 from tasks.celery_app import celery_app
 from models import Source, UserSettings, Article, Post, ParsingHistory, PostStatus
 from core.config import settings
-from parser import ArticleParser, SerpParser, fetch_links_from_page
+from parser import ArticleParser, SerpParser, fetch_links_from_page, fetch_rss_articles
 from ai import ContentAnalyzer, SEOWriter, SEOChecker, SelfReviewer, NanaBananaGenerator
 from publisher import UTMInjector
 from tasks.publish_task import publish_post
@@ -168,12 +168,28 @@ async def _parse_and_generate_async() -> dict:
         # Step 3: Collect URLs from sources
         logger.info("Collecting URLs from sources")
         all_urls: Set[str] = set()
+        url_to_source: Dict[str, int] = {}
+        rss_items: List[tuple] = []  # (source_id, article_dict)
 
         for source in sources:
             try:
                 logger.info(f"Fetching links from source: {source.name or source.url}")
-                links = await fetch_links_from_page(source.url)
-                all_urls.update(links)
+                url_lower = source.url.lower()
+
+                if "rss" in url_lower or "feed" in url_lower or ".xml" in url_lower:
+                    articles = await fetch_rss_articles(source.url)
+                    for article in articles:
+                        art_url = article.get("url", "").strip()
+                        if art_url:
+                            all_urls.add(art_url)
+                            url_to_source[art_url] = source.id
+                            rss_items.append((source.id, article))
+                else:
+                    links = await fetch_links_from_page(source.url)
+                    for link in links:
+                        all_urls.add(link)
+                        url_to_source[link] = source.id
+
                 stats["sources_processed"] += 1
 
                 # Update last parsed time
@@ -195,10 +211,14 @@ async def _parse_and_generate_async() -> dict:
         # Step 4: Collect URLs from SERP keywords
         if serp_keywords:
             logger.info(f"Searching SERP for {len(serp_keywords)} keywords")
+            default_source_id = sources[0].id if sources else None
             for keyword in serp_keywords:
                 try:
                     serp_urls = await SerpParser.search_all(keyword)
-                    all_urls.update(serp_urls)
+                    for u in serp_urls:
+                        all_urls.add(u)
+                        if default_source_id and u not in url_to_source:
+                            url_to_source[u] = default_source_id
                 except Exception as e:
                     logger.error(f"Error searching for keyword '{keyword}': {e}")
                     stats["errors"] += 1
@@ -222,6 +242,36 @@ async def _parse_and_generate_async() -> dict:
         new_urls = all_urls - existing_urls_set
         logger.info(f"Found {len(new_urls)} new URLs to process ({len(existing_urls_set)} already in database)")
 
+        # Step 5b: Save RSS articles (content already in feed, no per-article fetch)
+        for source_id, article in rss_items:
+            art_url = article.get("url", "").strip()
+            if art_url not in new_urls:
+                continue
+            try:
+                async with local_session_factory() as db:
+                    try:
+                        result = await db.execute(
+                            select(Article.id).where(Article.url == art_url)
+                        )
+                        if result.scalar_one_or_none():
+                            continue
+                        art = Article(
+                            source_id=source_id,
+                            url=art_url,
+                            title=article.get("title", "")[:512],
+                            content=article.get("content", "") or "",
+                            is_processed=False,
+                        )
+                        db.add(art)
+                        await db.commit()
+                        logger.info(f"RSS: saved article {art_url[:60]}...")
+                    except Exception:
+                        await db.rollback()
+                        raise
+            except Exception as e:
+                logger.error(f"RSS save error for {art_url}: {e}")
+                stats["errors"] += 1
+
         # Step 6: Process each new URL
         utm_injector = UTMInjector()
 
@@ -229,37 +279,59 @@ async def _parse_and_generate_async() -> dict:
             try:
                 logger.info(f"Processing URL: {url}")
 
-                # Parse article
-                html = await ArticleParser.fetch_html(url)
-                if not html:
-                    logger.warning(f"Failed to fetch HTML for {url}")
-                    await _save_to_history(url, "failed", "Could not fetch HTML", local_session_factory)
-                    stats["errors"] += 1
-                    continue
+                article_data = None
+                article_id = None
+                source_id = url_to_source.get(url, sources[0].id if sources else None)
 
-                article_data = ArticleParser.parse_article(html, url)
-                if not article_data:
-                    logger.warning(f"Failed to parse article from {url}")
-                    await _save_to_history(url, "failed", "Could not parse article", local_session_factory)
-                    stats["errors"] += 1
-                    continue
-
-                # Save article to database
+                # Try to load from DB first (RSS articles already saved with content)
                 async with local_session_factory() as db:
-                    try:
-                        article = Article(
-                            url=url,
-                            title=article_data.get("title"),
-                            content=article_data.get("content"),
-                            is_processed=False,
-                        )
-                        db.add(article)
-                        await db.commit()
-                        await db.refresh(article)
-                        article_id = article.id
-                    except Exception:
-                        await db.rollback()
-                        raise
+                    result = await db.execute(select(Article).where(Article.url == url))
+                    existing_article = result.scalar_one_or_none()
+                    if existing_article:
+                        if existing_article.is_processed:
+                            continue
+                        article_data = {
+                            "title": existing_article.title,
+                            "content": existing_article.content,
+                        }
+                        article_id = existing_article.id
+
+                if not article_data:
+                    # Fetch and parse (non-RSS flow)
+                    html = await ArticleParser.fetch_html(url)
+                    if not html:
+                        logger.warning(f"Failed to fetch HTML for {url}")
+                        await _save_to_history(url, "failed", "Could not fetch HTML", local_session_factory)
+                        stats["errors"] += 1
+                        continue
+
+                    article_data = ArticleParser.parse_article(html, url)
+                    if not article_data:
+                        logger.warning(f"Failed to parse article from {url}")
+                        await _save_to_history(url, "failed", "Could not parse article", local_session_factory)
+                        stats["errors"] += 1
+                        continue
+
+                    # Save article to database
+                    if not source_id:
+                        logger.warning(f"No source_id for {url}, skipping")
+                        continue
+                    async with local_session_factory() as db:
+                        try:
+                            article = Article(
+                                source_id=source_id,
+                                url=url,
+                                title=article_data.get("title"),
+                                content=article_data.get("content"),
+                                is_processed=False,
+                            )
+                            db.add(article)
+                            await db.commit()
+                            await db.refresh(article)
+                            article_id = article.id
+                        except Exception:
+                            await db.rollback()
+                            raise
 
                 stats["articles_parsed"] += 1
                 logger.info(f"Saved article {article_id}: {article_data.get('title')}")

@@ -24,7 +24,7 @@ def test_imports():
         from core.database import async_session, init_db
         logger.success("✓ core.database imported")
         
-        from parser import ArticleParser, SerpParser, fetch_links_from_page
+        from parser import ArticleParser, SerpParser, fetch_links_from_page, fetch_rss_articles
         logger.success("✓ parser modules imported")
         
         from ai import ContentAnalyzer, SEOWriter, SEOChecker, SelfReviewer, NanaBananaGenerator
