@@ -10,8 +10,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
+from aiogram.types import URLInputFile
+
 from tasks.celery_app import celery_app
-from models import Post, UserSettings, PostStatus
+from models import Post, UserSettings, PostStatus, TargetPlatform
 from core.config import settings
 from publisher import TelegramPublisher, VCPublisher, RBCPublisher
 from core.config import config
@@ -161,99 +163,45 @@ async def _publish_post_async(post_id: int) -> dict:
                 **results,
             }
 
-        # Parse tg_channels from comma-separated string
-        tg_channels = parse_comma_separated(user_settings.tg_channels)
+        target_platform = getattr(post, "target_platform", None) or "vc"
 
-        # Step 3: Publish to Telegram channels
-        if tg_channels:
-            logger.info(f"Publishing to {len(tg_channels)} Telegram channels")
-            if not config.telegram_bot_token:
-                logger.error("TELEGRAM_BOT_TOKEN not configured")
-                results["errors"].append("telegram_token_missing")
+        # Platform-specific routing: VC = autopost stub, RBC = send draft to admin in TG
+        if target_platform == TargetPlatform.RBC.value:
+            # RBC: send full post + image to admin for manual publication
+            admin_chat_id = getattr(config, "admin_chat_id", None) or getattr(settings, "admin_chat_id", None)
+            bot_token = getattr(config, "telegram_bot_token", None) or getattr(settings, "telegram_bot_token", None)
+            if not admin_chat_id or not bot_token:
+                logger.warning("RBC post: admin_chat_id or telegram_bot_token not configured")
+                results["errors"].append("rbc_admin_not_configured")
             else:
-                bot = Bot(token=config.telegram_bot_token)
-                tg_publisher = TelegramPublisher()
+                bot = Bot(token=bot_token)
                 try:
-                    for channel_id in tg_channels:
-                        try:
-                            logger.info(f"Publishing to Telegram channel: {channel_id}")
-                            success = await tg_publisher.publish(
-                                bot=bot,
-                                channel_id=channel_id,
-                                text=post_text,
-                                image_url=post_image_url,
-                            )
-                            if success:
-                                logger.success(f"Published to Telegram channel {channel_id}")
-                                results["telegram"].append({
-                                    "channel": channel_id,
-                                    "status": "success",
-                                })
-                            else:
-                                logger.error(f"Failed to publish to Telegram channel {channel_id}")
-                                results["telegram"].append({
-                                    "channel": channel_id,
-                                    "status": "failed",
-                                })
-                                results["errors"].append(f"telegram_{channel_id}_failed")
-                        except Exception as e:
-                            logger.error(f"Error publishing to Telegram channel {channel_id}: {e}")
-                            results["telegram"].append({
-                                "channel": channel_id,
-                                "status": "error",
-                                "error": str(e),
-                            })
-                            results["errors"].append(f"telegram_{channel_id}_error")
+                    header = "📝 [ЧЕРНОВИК ДЛЯ РБК - РУЧНАЯ ПУБЛИКАЦИЯ]\n\n"
+                    full_text = f"{header}<b>{post_title or 'Без заголовка'}</b>\n\n{post_text}"
+                    if post_image_url:
+                        await bot.send_photo(
+                            chat_id=admin_chat_id,
+                            photo=URLInputFile(post_image_url),
+                            caption=full_text,
+                            parse_mode="HTML",
+                        )
+                    else:
+                        await bot.send_message(
+                            chat_id=admin_chat_id,
+                            text=full_text,
+                            parse_mode="HTML",
+                        )
+                    results["rbc"] = True
+                    logger.success(f"RBC draft sent to admin for post {post_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send RBC draft to admin: {e}")
+                    results["errors"].append(f"rbc_draft_error: {e}")
                 finally:
                     await bot.session.close()
         else:
-            logger.info("No Telegram channels configured")
-
-        # Step 4: Publish to VC.ru
-        if config.vc_session_token:
-            logger.info("Publishing to VC.ru")
-            try:
-                vc_publisher = VCPublisher()
-                success = vc_publisher.publish(
-                    title=post_title or "Untitled Post",
-                    text=post_text,
-                    image_url=post_image_url,
-                )
-                results["vc"] = success
-                if success:
-                    logger.success("Published to VC.ru")
-                else:
-                    logger.warning("VC.ru publishing returned False")
-                    results["errors"].append("vc_failed")
-            except Exception as e:
-                logger.error(f"Error publishing to VC.ru: {e}")
-                results["errors"].append(f"vc_error: {e}")
-        else:
-            logger.info("VC.ru not configured (VC_SESSION_TOKEN missing)")
-
-        # Step 5: Publish to RBC Companies
-        if config.rbc_login and config.rbc_password:
-            logger.info("Publishing to RBC Companies")
-            try:
-                rbc_publisher = RBCPublisher()
-                # RBC requires image_path (local file), not image_url
-                # TODO: Download image from image_url to local file first
-                success = await rbc_publisher.publish(
-                    title=post_title or "Untitled Post",
-                    text=post_text,
-                    image_path=None,
-                )
-                results["rbc"] = success
-                if success:
-                    logger.success("Published to RBC Companies")
-                else:
-                    logger.warning("RBC Companies publishing returned False")
-                    results["errors"].append("rbc_failed")
-            except Exception as e:
-                logger.error(f"Error publishing to RBC Companies: {e}")
-                results["errors"].append(f"rbc_error: {e}")
-        else:
-            logger.info("RBC Companies not configured (RBC_LOGIN or RBC_PASSWORD missing)")
+            # VC: autoposting stub (to be implemented)
+            logger.info("Auto-posting to VC.ru (to be implemented)")
+            results["vc"] = False
 
         # Determine overall result
         has_success = (

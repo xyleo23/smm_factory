@@ -15,6 +15,11 @@ class PostStatus(StrEnum):
     PUBLISHED = "published"
 
 
+class TargetPlatform(StrEnum):
+    VC = "vc"
+    RBC = "rbc"
+
+
 class Post(Base):
     __tablename__ = "posts"
 
@@ -33,4 +38,9 @@ class Post(Base):
     )
     published_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
+    )
+    target_platform: Mapped[str] = mapped_column(
+        String(16),
+        default=TargetPlatform.VC.value,
+        nullable=False,
     )

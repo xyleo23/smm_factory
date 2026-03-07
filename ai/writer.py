@@ -36,9 +36,10 @@ class SEOWriter:
         llm: str | None = None,
         llm_model: str | None = None,
         source_url: str | None = None,
+        target_platform: str = "vc",
     ) -> str:
         """
-        Пишет короткий пост для Telegram (500–800 символов, русский язык).
+        Пишет короткий пост для целевой площадки (VC.ru или РБК).
 
         Args:
             analysis: Результат анализа контента от ContentAnalyzer
@@ -47,13 +48,16 @@ class SEOWriter:
             llm: Модель LLM (alias для llm_model)
             llm_model: Модель для генерации
             source_url: Ссылка на оригинал — добавляется в конец поста
+            target_platform: 'vc' или 'rbc' — влияет на стиль и ограничения
 
         Returns:
-            Готовый текст поста для Telegram
+            Готовый текст поста
         """
         model = llm or llm_model or "anthropic/claude-3-5-sonnet"
         instance = cls()
-        return await instance._write_impl(analysis, tone, keywords or [], model, source_url)
+        return await instance._write_impl(
+            analysis, tone, keywords or [], model, source_url, target_platform
+        )
 
     async def _write_impl(
         self,
@@ -62,21 +66,37 @@ class SEOWriter:
         keywords: list[str],
         llm_model: str,
         source_url: str | None,
+        target_platform: str = "vc",
     ) -> str:
         keywords_str = ", ".join(keywords) if keywords else "не заданы"
 
-        system_prompt = (
-            "Ты SMM-копирайтер. Пиши короткие посты для Telegram-канала. "
+        base_rules = (
+            "Ты SMM-копирайтер. Пиши короткие посты. "
             "ПРАВИЛА:\n"
             "- Язык: ТОЛЬКО русский\n"
             "- Длина: 500–800 символов\n"
             "- Формат: 3–5 предложений, один абзац или короткие абзацы\n"
             "- БЕЗ markdown-заголовков (# ## ###), БЕЗ списков типа 'Key Insights', 'Overview'\n"
-            "- Тон: профессиональный, живой, подходящий для канала о бизнесе/финансах\n"
             "- Не используй английские шаблоны вроде 'Comprehensive Guide', 'Key Insights'\n"
             f"- Tone of Voice: {tone}\n"
             f"- Ключевые слова (органично): {keywords_str}"
         )
+
+        if target_platform == "rbc":
+            system_prompt = (
+                base_rules
+                + "\n\n--- СТРОГИЕ ТРЕБОВАНИЯ ДЛЯ РБК ---\n"
+                "- Пиши в строгом экспертном стиле. Тон: аналитика и экспертиза.\n"
+                "- КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО упоминать конкурентов.\n"
+                "- ЗАПРЕЩЕНЫ прямые продажи и призывы купить.\n"
+                "- Никаких CTA типа 'подписывайтесь', 'оформите заказ', 'купите'.\n"
+            )
+        else:
+            system_prompt = (
+                base_rules
+                + "\n"
+                "- Тон: профессиональный, живой, подходящий для канала о бизнесе/финансах.\n"
+            )
 
         user_prompt = (
             "По анализу статьи конкурента напиши краткий пост для Telegram.\n\n"

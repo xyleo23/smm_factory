@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import sessionmaker
 
 from tasks.celery_app import celery_app
-from models import Source, UserSettings, Article, Post, ParsingHistory, PostStatus
+from models import Source, UserSettings, Article, Post, ParsingHistory, PostStatus, TargetPlatform
 from core.config import settings, config
 from parser import (
     ArticleParser,
@@ -32,6 +32,16 @@ def parse_comma_separated(value: str | None) -> list[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _target_platform_from_source_url(source_url: str | None) -> str:
+    """Определяет target_platform по URL источника: RBC Companies → rbc, иначе → vc."""
+    if not source_url:
+        return TargetPlatform.VC.value
+    url_lower = source_url.lower()
+    if "companies.rbc" in url_lower or "rbc.ru" in url_lower:
+        return TargetPlatform.RBC.value
+    return TargetPlatform.VC.value
 
 
 async def _notify_admin_async(post_id: int) -> None:
@@ -130,6 +140,7 @@ async def _generate_post_for_article(
     internal_links: list[str],
     local_session_factory,
     stats: dict,
+    source_url: str | None = None,
 ) -> Optional[int]:
     """
     Run the AI pipeline for a single article and persist the resulting Post.
@@ -137,6 +148,8 @@ async def _generate_post_for_article(
     Returns the new post_id on success, or None on failure.
     The caller is responsible for updating stats["posts_created"] etc.
     """
+    target_platform = _target_platform_from_source_url(source_url)
+
     try:
         analysis = await ContentAnalyzer.analyze(
             article_data.get("title", ""),
@@ -149,6 +162,7 @@ async def _generate_post_for_article(
             keywords=keywords,
             llm=user_settings.selected_llm,
             source_url=article_data.get("url"),
+            target_platform=target_platform,
         )
 
         seo_result = await SEOChecker.check(text, keywords)
@@ -161,6 +175,7 @@ async def _generate_post_for_article(
         image_url = await NanaBananaGenerator.generate(
             title=article_data.get("title", ""),
             topic=article_data.get("title", ""),
+            target_platform=target_platform,
         )
 
         async with local_session_factory() as db:
@@ -171,6 +186,7 @@ async def _generate_post_for_article(
                     text=text,
                     image_url=image_url,
                     status=PostStatus.PENDING.value,
+                    target_platform=target_platform,
                 )
                 db.add(post)
                 await db.commit()
@@ -261,6 +277,7 @@ async def _parse_and_generate_async() -> dict:
             logger.warning("No active sources found in database")
             return {"status": "skipped", "reason": "no_sources", **stats}
 
+        source_id_to_url = {s.id: s.url for s in sources}
         logger.info(f"Found {len(sources)} active sources")
 
         # Step 2: Get user settings (first user or use defaults)
@@ -354,6 +371,7 @@ async def _parse_and_generate_async() -> dict:
 
         # Step 5: Filter out already existing articles
         utm_injector = UTMInjector()
+        source_id_to_url = {s.id: s.url for s in sources}
 
         if all_urls:
             async with local_session_factory() as db:
@@ -494,6 +512,7 @@ async def _parse_and_generate_async() -> dict:
                     stats["articles_parsed"] += 1
                     logger.info(f"Saved article {article_id}: {article_data.get('title')}")
 
+                    source_url = source_id_to_url.get(source_id, "") if source_id else ""
                     post_id = await _generate_post_for_article(
                         article_id=article_id,
                         article_data=article_data,
@@ -503,6 +522,7 @@ async def _parse_and_generate_async() -> dict:
                         internal_links=internal_links,
                         local_session_factory=local_session_factory,
                         stats=stats,
+                        source_url=source_url,
                     )
 
                     if post_id is None:
@@ -544,6 +564,7 @@ async def _parse_and_generate_async() -> dict:
                         "content": article.text,
                         "url": article.url,
                     }
+                    source_url = source_id_to_url.get(article.source_id, "") if article.source_id else ""
                     post_id = await _generate_post_for_article(
                         article_id=article.id,
                         article_data=article_data,
@@ -553,6 +574,7 @@ async def _parse_and_generate_async() -> dict:
                         internal_links=internal_links,
                         local_session_factory=local_session_factory,
                         stats=stats,
+                        source_url=source_url,
                     )
 
                     if post_id is None:

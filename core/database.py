@@ -27,6 +27,7 @@ async def init_db() -> None:
         "ALTER TABLE posts ADD COLUMN title VARCHAR(512)",
         "ALTER TABLE posts ADD COLUMN published_at TIMESTAMPTZ",
         "ALTER TABLE sources ADD COLUMN last_parsed_at TIMESTAMPTZ",
+        "ALTER TABLE posts ADD COLUMN target_platform VARCHAR(16) DEFAULT 'vc'",
     ]
     for sql in migrations:
         try:
