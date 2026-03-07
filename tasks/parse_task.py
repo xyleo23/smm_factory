@@ -18,9 +18,12 @@ from core.config import settings, config
 from parser import (
     ArticleParser,
     SerpParser,
+    fetch_dtf_articles,
+    fetch_klerk_articles,
     fetch_links_from_page,
     fetch_rbc_companies_articles,
     fetch_rss_articles,
+    fetch_timeweb_articles,
 )
 from ai import ContentAnalyzer, SEOWriter, SEOChecker, SelfReviewer, NanaBananaGenerator
 from publisher import UTMInjector
@@ -320,6 +323,30 @@ async def _parse_and_generate_async() -> dict:
                             rss_items.append((source.id, article))
                 elif "companies.rbc.ru/persons" in url_lower or "companies.rbc.ru/id" in url_lower:
                     articles = await fetch_rbc_companies_articles(source.url)
+                    for article in articles:
+                        art_url = article.get("url", "").strip()
+                        if art_url:
+                            all_urls.add(art_url)
+                            url_to_source[art_url] = source.id
+                            rbc_items.append((source.id, article))
+                elif "dtf.ru" in url_lower:
+                    articles = await fetch_dtf_articles(source.url)
+                    for article in articles:
+                        art_url = article.get("url", "").strip()
+                        if art_url:
+                            all_urls.add(art_url)
+                            url_to_source[art_url] = source.id
+                            rbc_items.append((source.id, article))
+                elif "timeweb.com" in url_lower:
+                    articles = await fetch_timeweb_articles(source.url)
+                    for article in articles:
+                        art_url = article.get("url", "").strip()
+                        if art_url:
+                            all_urls.add(art_url)
+                            url_to_source[art_url] = source.id
+                            rbc_items.append((source.id, article))
+                elif "klerk.ru" in url_lower:
+                    articles = await fetch_klerk_articles(source.url)
                     for article in articles:
                         art_url = article.get("url", "").strip()
                         if art_url:

@@ -274,9 +274,187 @@ async def fetch_rss_articles(url: str) -> list[dict]:
                 })
         logger.info(f"RSS parsed {len(articles)} articles from {url}")
         return articles
-    except Exception as e:
-        logger.error(f"RSS parse error {url}: {e}")
+
+
+async def fetch_dtf_articles(url: str) -> list[dict]:
+    """
+    Парсит статью или страницу со статьями с DTF.ru.
+    Возвращает список {url, title, content}.
+    """
+    html = await ArticleParser.fetch_html(url)
+    if not html:
+        logger.warning(f"DTF: failed to fetch {url}")
         return []
+
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "aside", "iframe"]):
+            tag.decompose()
+
+        content_selectors = [
+            ".content",
+            ".l-island__content",
+            '[data-block-type="text"]',
+            ".l-entry__body",
+            "article .content",
+            '[itemprop="articleBody"]',
+        ]
+        title = None
+        title_el = (
+            soup.select_one("h1")
+            or soup.select_one(".content-title")
+            or soup.select_one('[itemprop="headline"]')
+            or soup.select_one("meta[property='og:title']")
+        )
+        if title_el:
+            title = title_el.get("content", "").strip() if title_el.name == "meta" else title_el.get_text(strip=True)
+
+        content = ""
+        for sel in content_selectors:
+            tag = soup.select_one(sel)
+            if tag:
+                paragraphs = tag.find_all(["p", "li"])
+                if paragraphs:
+                    content = "\n\n".join(
+                        p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)
+                    )
+                else:
+                    content = tag.get_text(separator="\n", strip=True)
+                if len(content) > 100:
+                    break
+
+        if not content:
+            parsed = ArticleParser.parse_article(html, url)
+            if parsed:
+                title = title or parsed.get("title", "")
+                content = parsed.get("content", "")
+
+        if title or content:
+            content = ArticleParser._strip_junk(content)
+            return [{"url": url, "title": title or "", "content": content}]
+    except Exception as e:
+        logger.error(f"DTF parse error {url}: {e}")
+    return []
+
+
+async def fetch_timeweb_articles(url: str) -> list[dict]:
+    """
+    Парсит статью с timeweb.com/ru/community/articles/.
+    Возвращает список {url, title, content}.
+    """
+    html = await ArticleParser.fetch_html(url)
+    if not html:
+        logger.warning(f"Timeweb: failed to fetch {url}")
+        return []
+
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "aside", "iframe"]):
+            tag.decompose()
+
+        content_selectors = [
+            ".article__body",
+            ".article-content",
+            ".content__body",
+            '[itemprop="articleBody"]',
+            "article .content",
+            ".post__content",
+        ]
+        title_el = (
+            soup.select_one("h1")
+            or soup.select_one('[itemprop="headline"]')
+            or soup.select_one("meta[property='og:title']")
+        )
+        title = ""
+        if title_el:
+            title = title_el.get("content", "").strip() if title_el.name == "meta" else title_el.get_text(strip=True)
+
+        content = ""
+        for sel in content_selectors:
+            tag = soup.select_one(sel)
+            if tag:
+                paragraphs = tag.find_all("p")
+                if paragraphs:
+                    content = "\n\n".join(
+                        p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)
+                    )
+                else:
+                    content = tag.get_text(separator="\n", strip=True)
+                if len(content) > 100:
+                    break
+
+        if not content:
+            parsed = ArticleParser.parse_article(html, url)
+            if parsed:
+                title = title or parsed.get("title", "")
+                content = parsed.get("content", "")
+
+        if title or content:
+            content = ArticleParser._strip_junk(content)
+            return [{"url": url, "title": title or "", "content": content}]
+    except Exception as e:
+        logger.error(f"Timeweb parse error {url}: {e}")
+    return []
+
+
+async def fetch_klerk_articles(url: str) -> list[dict]:
+    """
+    Парсит статью с klerk.ru/materials/.
+    Возвращает список {url, title, content}.
+    """
+    html = await ArticleParser.fetch_html(url)
+    if not html:
+        logger.warning(f"Klerk: failed to fetch {url}")
+        return []
+
+    try:
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "nav", "footer", "aside", "iframe"]):
+            tag.decompose()
+
+        content_selectors = [
+            ".article__body",
+            ".material__body",
+            ".article-content",
+            '[itemprop="articleBody"]',
+            ".content__body",
+            "article .content",
+        ]
+        title_el = (
+            soup.select_one("h1")
+            or soup.select_one('[itemprop="headline"]')
+            or soup.select_one("meta[property='og:title']")
+        )
+        title = ""
+        if title_el:
+            title = title_el.get("content", "").strip() if title_el.name == "meta" else title_el.get_text(strip=True)
+
+        content = ""
+        for sel in content_selectors:
+            tag = soup.select_one(sel)
+            if tag:
+                paragraphs = tag.find_all(["p", "li", "h2", "h3"])
+                if paragraphs:
+                    content = "\n\n".join(
+                        p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)
+                    )
+                else:
+                    content = tag.get_text(separator="\n", strip=True)
+                if len(content) > 100:
+                    break
+
+        if not content:
+            parsed = ArticleParser.parse_article(html, url)
+            if parsed:
+                title = title or parsed.get("title", "")
+                content = parsed.get("content", "")
+
+        if title or content:
+            content = ArticleParser._strip_junk(content)
+            return [{"url": url, "title": title or "", "content": content}]
+    except Exception as e:
+        logger.error(f"Klerk parse error {url}: {e}")
+    return []
 
 
 async def fetch_rbc_companies_articles(profile_url: str) -> list[dict]:
@@ -291,25 +469,21 @@ async def fetch_rbc_companies_articles(profile_url: str) -> list[dict]:
         headers={"User-Agent": ArticleParser.USER_AGENT},
         follow_redirects=True,
     ) as client:
-        # 1. GET страницы автора (один запрос)
         resp = await client.get(profile_url)
         resp.raise_for_status()
         html = resp.text
 
-        # 2. Найти все <a href="/news/..."> или href="https://companies.rbc.ru/news/..." на странице
         soup = BeautifulSoup(html, "html.parser")
         links: list[str] = []
         seen: set[str] = set()
         for a in soup.find_all("a", href=True):
             href = a["href"].strip()
-            # Нормализуем: относительные /news/... или абсолютные https://companies.rbc.ru/news/...
             if href.startswith(base + "/news/"):
                 path = href[len(base) :]
             elif href.startswith("/news/"):
                 path = href
             else:
                 continue
-            # 3. Фильтр: без ?, без category_filter, slug >= 6 символов
             if "?" in path or "category_filter" in path:
                 continue
             parts = [p for p in path.split("/") if p]
@@ -323,7 +497,6 @@ async def fetch_rbc_companies_articles(profile_url: str) -> list[dict]:
                 seen.add(full_url)
                 links.append(full_url)
 
-        # 4. До 20 уникальных URL статей — парсим с RBC-специфичными селекторами
         articles: list[dict] = []
         for url in links[:20]:
             try:
@@ -338,7 +511,6 @@ async def fetch_rbc_companies_articles(profile_url: str) -> list[dict]:
                 title_el = s.find("h1")
                 title = title_el.get_text(strip=True) if title_el else ""
 
-                # RBC Companies: селекторы именно для тела статьи (без меню/навигации)
                 content_div = (
                     s.select_one('[itemprop="articleBody"]')
                     or s.select_one(".article__body")
